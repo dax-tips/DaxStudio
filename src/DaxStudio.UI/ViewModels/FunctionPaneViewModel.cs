@@ -113,6 +113,16 @@ namespace DaxStudio.UI.ViewModels
             Process.Start(new ProcessStartInfo($"https://dax.guide/{func.Name}/?aff=dax-studio"));
         }
 
+        public bool CanLaunchDaxGuide(IFilterableTreeViewItem selectedItem)
+        {
+            if (selectedItem is ADOTabularFunctionsExtensions.TreeViewFunction func)
+            {
+                if (func.Function is ADOTabularFunction adoFunc)
+                    return adoFunc.Group != "USERDEFINED";
+            }
+            return false;
+        }
+
         public bool AutoHideMetadataVerticalScrollbars => Options.AutoHideMetadataVerticalScrollbars;
 
         public Task HandleAsync(UpdateGlobalOptions message, CancellationToken cancellationToken)

@@ -464,18 +464,21 @@ namespace DaxStudio.UI.Utils.Intellisense
         {
             var grd = new Grid();
             grd.ColumnDefinitions.Add(new ColumnDefinition() { MaxWidth = maxWidth });
-            var tb = new TextBlock {TextWrapping = TextWrapping.Wrap};
+            var tb = new TextBlock { TextWrapping = TextWrapping.Wrap };
             var caption = new Run(f.DaxName);
             tb.Inlines.Add(new Bold(caption));
             tb.Inlines.Add("\n");
             tb.Inlines.Add(f.Description);
 
-            var docLink = new Hyperlink();
-            docLink.Inlines.Add($"https://dax.guide/{f.Caption}");
-            docLink.NavigateUri = new Uri($"https://dax.guide/{f.Caption}/?aff=dax-studio");
-            docLink.RequestNavigate += InsightHyperLinkNavigate;
-            tb.Inlines.Add("\n");
-            tb.Inlines.Add(docLink);
+            if (f.Group != "USERDEFINED")
+            { 
+                var docLink = new Hyperlink();
+                docLink.Inlines.Add($"https://dax.guide/{f.Caption}");
+                docLink.NavigateUri = new Uri($"https://dax.guide/{f.Caption}/?aff=dax-studio");
+                docLink.RequestNavigate += InsightHyperLinkNavigate;
+                tb.Inlines.Add("\n");
+                tb.Inlines.Add(docLink);
+            }
             Grid.SetColumn(tb, 0);
             grd.Children.Add(tb);
             return grd;
