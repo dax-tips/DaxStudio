@@ -1,4 +1,5 @@
-﻿using DaxStudio.Interfaces;
+﻿using ADOTabular.AdomdClientWrappers;
+using DaxStudio.Interfaces;
 using DaxStudio.UI.Extensions;
 using DaxStudio.UI.Interfaces;
 using Parquet;
@@ -17,110 +18,117 @@ namespace DaxStudio.UI.Utils
 
     public static class ParquetExporter
     {
+
+
         // Used by the Data Export feature
-        public static async Task ExportDataReaderToParquetInChunksAsync(Stream fileStream, IDataReader reader, Action<String> StatusCallback, Action<long,bool> ProgressCallback, Func<bool> IsCancelled, int chunkSize = 1000000)
+        public static async Task ExportDataReaderToBuffersAsync(ParquetWriter parquetWriter, IDataReader reader, Action<String> StatusCallback, Action<long,bool> ProgressCallback, Func<bool> IsCancelled, List<List<object>> rowBuffers,List<DataField> fields, int rowGroupSize = 1000000)
         {
-            int resultSetIndex = 1;
-            //StatusCallback($"Starting export to parquet");
-
-
-            List<DataField> fields = CreateDataFieldsFromReader(reader);
-            var parquetSchema = new ParquetSchema(fields);
-
+            await Task.Yield();
 
             int outputRowCount = 0;
-            using (var parquetWriter = await ParquetWriter.CreateAsync(parquetSchema, fileStream))
+
+            var hasMoreRows = true;
+            while (hasMoreRows)
             {
-                var hasMoreRows = true;
-                while (hasMoreRows)
+
+
+                int rowCount = 0;
+
+                while (hasMoreRows && rowCount < rowGroupSize)
                 {
-                    var chunkData = new List<List<object>>();
+                    hasMoreRows = reader.Read();
+                    if (!hasMoreRows) break;
+
                     for (int i = 0; i < fields.Count; i++)
                     {
-                        chunkData.Add(new List<object>());
-                    }
-
-                    int rowCount = 0;
-
-                    while (hasMoreRows && rowCount < chunkSize)
-                    {
-                        hasMoreRows = reader.Read();
-                        if (!hasMoreRows) break;
-
-                        for (int i = 0; i < fields.Count; i++)
+                        try
                         {
-                            chunkData[i].Add(reader.GetValue(i));
+                            rowBuffers[i].Add(reader.GetValue(i));
                         }
-                        rowCount++;
-
-                        if (rowCount % 5000 == 0)
+                        catch( Exception ex)
                         {
-                                
-                            if (IsCancelled?.Invoke() == true)
-                            {
-                                StatusCallback("Export cancelled by user");
-                                ProgressCallback?.Invoke(outputRowCount + rowCount, true);
-                                return;
-                            }
-                            else
-                            {
-                                ProgressCallback?.Invoke(outputRowCount + rowCount, false);
-                            }
+                            System.Diagnostics.Debug.WriteLine(ex.Message);
                         }
                     }
+                    rowCount++;
 
-                    if (rowCount == 0)
-                        break;
-
-                    outputRowCount += rowCount;
-                    //StatusCallback($"Written {outputRowCount:n0} rows to the file output for query {resultSetIndex}");
-
-                    var columns = new List<DataColumn>();
-                    for (int i = 0; i < fields.Count; i++)
+                    if (rowCount % 5000 == 0)
                     {
 
-                        Array typedArray = ConvertToTypedArray(chunkData[i], fields[i].ClrType);
-                        columns.Add(new DataColumn(fields[i], typedArray));
-                    }
-
-                    using (var rowGroupWriter = parquetWriter.CreateRowGroup())
-                    {
-                        foreach (var column in columns)
+                        if (IsCancelled?.Invoke() == true)
                         {
-                            await rowGroupWriter.WriteColumnAsync(column);
+                            StatusCallback("Export cancelled by user");
+                            ProgressCallback?.Invoke(outputRowCount + rowCount, true);
+                            return;
+                        }
+                        else
+                        {
+                            ProgressCallback?.Invoke(outputRowCount + rowCount, false);
                         }
                     }
-
-                    await Task.Yield(); // cooperative multitasking
                 }
-            }
 
-            await fileStream.FlushAsync();
+                if (rowCount == 0)
+                    break;
+
+                outputRowCount += rowCount;
+
+            }
 
             //update final row count
             ProgressCallback?.Invoke(outputRowCount, false);
-
             
         }
 
+        internal static async Task WriteRowGroupToParquet(ParquetWriter parquetWriter, List<List<object>> chunkData, List<DataField> fields)
+        {
+            //StatusCallback($"Written {outputRowCount:n0} rows to the file output for query {resultSetIndex}");
 
+
+            var columns = new List<DataColumn>();
+            for (int i = 0; i < fields.Count; i++)
+            {
+
+                Array typedArray = ConvertToTypedArray(chunkData[i], fields[i].ClrType);
+                columns.Add(new DataColumn(fields[i], typedArray));
+            }
+
+            using (var rowGroupWriter = parquetWriter.CreateRowGroup())
+            {
+                foreach (var column in columns)
+                {
+                    await rowGroupWriter.WriteColumnAsync(column);
+                }
+            }
+
+            await Task.Yield(); // cooperative multitasking
+        }
+
+        internal static List<List<object>> ResetBuffers(List<DataField> fields,int bufferSize)
+        {
+            List<List<object>> chunkData = new List<List<object>>(fields.Count);
+            for (int i = 0; i < fields.Count; i++)
+            {
+                chunkData.Add(new List<object>(bufferSize));
+            }
+
+            return chunkData;
+        }
 
         public static async Task ExportDataReaderToParquetInChunksAsync(IQueryRunner runner, string outputPath, IDataReader reader, IStatusBarMessage statusProgress, int chunkSize = 1000000)
         {
-
             int resultSetIndex = 1;
             statusProgress.Update($"Starting export to parquet");
 
             do
             {
-               
                 string fileSuffix = resultSetIndex == 1 ? string.Empty : $"_{resultSetIndex}";
 
                 string filePath = Path.Combine(
                     Path.GetDirectoryName(outputPath) ?? Environment.CurrentDirectory,
                     $"{Path.GetFileNameWithoutExtension(outputPath)}{fileSuffix}.parquet");
 
-                List<DataField> fields = CreateDataFieldsFromReader( reader);
+                List<DataField> fields = CreateDataFieldsFromReader(reader);
                 var parquetSchema = new ParquetSchema(fields);
 
                 using (Stream fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true))
@@ -172,7 +180,7 @@ namespace DaxStudio.UI.Utils
                                     await rowGroupWriter.WriteColumnAsync(column);
                                 }
                             }
-
+                            
                             await Task.Yield(); // cooperative multitasking
                         }
                     }
@@ -193,7 +201,7 @@ namespace DaxStudio.UI.Utils
 
         }
 
-        private static List<DataField> CreateDataFieldsFromReader(IDataReader reader )
+        internal static List<DataField> CreateDataFieldsFromReader(IDataReader reader )
         {
             var fields = new List<DataField>();
             var cleanNames = reader.CleanColumnNames();

@@ -71,6 +71,8 @@ namespace ADOTabular.AdomdClientWrappers
             return new AdomdDataReader(_command.ExecuteReader( ));
         }
 
+        public Microsoft.AnalysisServices.AdomdClient.AdomdPropertyCollection Properties => _command.Properties;
+
 
         public int ExecuteNonQuery()
         {

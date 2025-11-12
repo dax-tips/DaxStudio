@@ -1,19 +1,19 @@
-﻿using System;
-using System.IO;
-using System.Linq;
-using System.Data;
-using System.Xml;
-using System.Collections.Generic;
-using System.Text.RegularExpressions;
-using System.Data.OleDb;
-using System.Globalization;
-using ADOTabular.AdomdClientWrappers;
+﻿using ADOTabular.AdomdClientWrappers;
 using ADOTabular.Enums;
 using ADOTabular.Extensions;
-using ADOTabular.Utils;
 using ADOTabular.Interfaces;
+using ADOTabular.Utils;
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Data.OleDb;
 using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Xml;
 
 namespace ADOTabular
 {
@@ -425,7 +425,17 @@ namespace ADOTabular
             }
         }
 
+        public ADOTabular.AdomdClientWrappers.AdomdDataReader ExecuteReaderForPrepare(string command, List<Microsoft.AnalysisServices.AdomdClient.AdomdParameter> paramList)
+        {
+            return ExecuteReader(command, paramList, true);
+        }
+
         public ADOTabular.AdomdClientWrappers.AdomdDataReader ExecuteReader(string command, List<Microsoft.AnalysisServices.AdomdClient.AdomdParameter> paramList)
+        {
+            return ExecuteReader(command, paramList, false);
+        }
+
+        private ADOTabular.AdomdClientWrappers.AdomdDataReader ExecuteReader(string command, List<Microsoft.AnalysisServices.AdomdClient.AdomdParameter> paramList,bool prepare)
         {
             if (_runningCommand != null)
             {
@@ -436,6 +446,10 @@ namespace ADOTabular
             _runningCommand = _adomdConn.CreateCommand();
             _runningCommand.CommandType = CommandType.Text;
             _runningCommand.CommandText = command;
+            if (prepare)
+            {
+                _runningCommand.Properties.Add(new Microsoft.AnalysisServices.AdomdClient.AdomdProperty("ExecutionMode", "Prepare"));
+            }
 
             if (paramList != null)
             {

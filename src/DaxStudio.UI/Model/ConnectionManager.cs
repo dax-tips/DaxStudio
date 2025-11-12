@@ -386,6 +386,16 @@ namespace DaxStudio.UI.Model
                 return _connection.ExecuteReader(query, paramList);
             });
         }
+
+        public AdomdDataReader ExecuteReaderForPrepare(string query, List<Microsoft.AnalysisServices.AdomdClient.AdomdParameter> paramList)
+        {
+            return _retry.Execute(() =>
+            {
+
+                return _connection.ExecuteReaderForPrepare(query, paramList);
+            });
+        }
+
         public string FileName
         {
             get => _connection?.FileName;

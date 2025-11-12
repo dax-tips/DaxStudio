@@ -1,32 +1,35 @@
 ﻿using ADOTabular.AdomdClientWrappers;
 using Caliburn.Micro;
 using DaxStudio.Common;
+using DaxStudio.Common.Extensions;
+using DaxStudio.Interfaces;
+using DaxStudio.UI.Converters;
 using DaxStudio.UI.Enums;
 using DaxStudio.UI.Events;
 using DaxStudio.UI.Extensions;
+using DaxStudio.UI.Interfaces;
 using DaxStudio.UI.Model;
+using DaxStudio.UI.Utils;
 using DaxStudio.UI.ViewModels.ExportDataWizard;
+using Parquet;
+using Parquet.Schema;
 using Serilog;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Data;
 using System.Data.SqlClient;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.IO.Pipes;
 using System.Linq;
 using System.Security;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using DaxStudio.Interfaces;
-using System.ComponentModel;
-using DaxStudio.UI.Converters;
-using DaxStudio.Common.Extensions;
-using DaxStudio.UI.Interfaces;
-using DaxStudio.UI.Utils;
 
 namespace DaxStudio.UI.ViewModels
 {
@@ -63,6 +66,8 @@ namespace DaxStudio.UI.ViewModels
         private CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
         private Regex _illegalFileCharsRegex;
         const long MaxBatchSize = 10000;
+        const int ParquetMaxBatchSize = 100000;
+        const int bufferRowCount = 1000000;
         private Stopwatch _stopwatch = new Stopwatch();
 
         private const string ExportCompleteMsg = "Model Export Complete: {0} tables exported";
@@ -307,77 +312,24 @@ namespace DaxStudio.UI.ViewModels
 
                         // get a count of the total rows in the table
                         var connRead = Document.Connection;
-                        DataTable dtRows = connRead.ExecuteDaxQueryDataTable(daxRowCount);
-                        var totalRows = dtRows.Rows[0].Field<long?>(0) ?? 0;
-                        table.TotalRows = totalRows;
-
+                        using var reader = connRead.ExecuteReader(daxRowCount,null);
+                        {
+                            // read total rows in table
+                            reader.Read();
+                            var totalRows = reader.GetInt64(0);
+                            table.TotalRows = totalRows;
+                            reader.Close();
+                        }
 
                         using (Stream fileStream = new FileStream(parquetFilePath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true))
                         using (var statusMsg = new StatusBarMessage(Document, $"Exporting {table.Caption}"))
                         {
-                            for (long batchRows = 0; batchRows < totalRows; batchRows += MaxBatchSize)
+                            bool flowControl = await ExportTableToParquetAsync(totalTables, tableCnt, table, connRead,  fileStream, statusMsg);
+                            if (!flowControl)
                             {
-
-                                var daxQuery = $"EVALUATE {table.DaxName}";
-
-                                // if the connection supports TOPNSKIP then use that to query batches of rows
-                                if (connRead.AllFunctions.Contains("TOPNSKIP"))
-                                    daxQuery = $"EVALUATE TOPNSKIP({MaxBatchSize}, {batchRows}, {table.DaxName} )";
-
-                                Action<string> updateStatus = (s) => statusMsg.Update(s);
-                                Action<long, bool> updateProgress = (rowCount, isCancelled) =>
-                                {
-                                    table.RowCount = rowCount + batchRows;
-                                    table.Status = isCancelled ? ExportStatus.Cancelled : ExportStatus.Exporting;
-                                    statusMsg.Update($"Exporting Table {tableCnt} of {totalTables} : {table.DaxName} ({rowCount + batchRows:N0} rows)");
-                                    Document.RefreshElapsedTime();
-                                };
-                                Func<bool> isCancelRequested = () => CancelRequested;
-
-
-                                using (var reader = connRead.ExecuteReader(daxQuery, null))
-                                {
-
-                                    // Write data
-                                    await ParquetExporter.ExportDataReaderToParquetInChunksAsync(fileStream, reader, updateStatus, updateProgress, isCancelRequested);
-
-                                    Document.RefreshElapsedTime();
-
-
-                                    // if cancel has been requested do not write any more files
-                                    if (CancelRequested)
-                                    {
-                                        await EventAggregator.PublishOnUIThreadAsync(new OutputMessage(MessageType.Warning, "Data Export Cancelled"));
-                                        table.Status = ExportStatus.Cancelled;
-                                        MarkWaitingTablesAsSkipped();
-
-                                        // break out of foreach table loop
-                                        break;
-                                    }
-                                }
-
-                                // do not loop around if the current connection does not support TOPNSKIP
-                                if (!connRead.AllFunctions.Contains("TOPNSKIP")) break;
-
-                                if (CancelRequested)
-                                {
-                                    MarkWaitingTablesAsSkipped();
-                                    table.Status = ExportStatus.Cancelled;
-                                    break;
-
-                                }
-                            } // end of batch
-
-                            await EventAggregator.PublishOnUIThreadAsync(new OutputMessage(MessageType.Information, ExportTableMsg.Format(table.RowCount, table.RowCount == 1 ? "" : "s", table.DaxName + ".csv")));
-
-                            if (CancelRequested)
-                            {
-                                MarkWaitingTablesAsSkipped();
                                 break;
-
                             }
                         }
-
 
                         table.Status = ExportStatus.Done;
                     }
@@ -410,6 +362,100 @@ namespace DaxStudio.UI.ViewModels
             });
             return exceptionFound;
         }
+
+        private async Task<bool> ExportTableToParquetAsync(int totalTables, int tableCnt, SelectedTable table, IConnectionManager connRead, Stream fileStream, StatusBarMessage statusMsg)
+        {
+
+            List<DataField> fields = null;
+            List<List<object>> rowBuffer = null;
+            ParquetSchema parquetSchema = null;
+
+            using (var schemaReader = connRead.ExecuteReader($"EVALUATE TOPN(0,{table.DaxName})", null))
+            {
+                fields = ParquetExporter.CreateDataFieldsFromReader(schemaReader);
+                parquetSchema = new ParquetSchema(fields);
+                rowBuffer = ParquetExporter.ResetBuffers(fields,bufferRowCount);
+            }
+
+
+            using (var parquetWriter = await ParquetWriter.CreateAsync(parquetSchema, fileStream))
+            {
+                for (long batchRows = 0; batchRows < table.TotalRows; batchRows += MaxBatchSize)
+                {
+
+                    var daxQuery = $"EVALUATE {table.DaxName}";
+
+                    // if the connection supports TOPNSKIP then use that to query batches of rows
+                    if (connRead.AllFunctions.Contains("TOPNSKIP"))
+                        daxQuery = $"EVALUATE TOPNSKIP({MaxBatchSize}, {batchRows}, {table.DaxName} )";
+
+                    Action<string> updateStatus = (s) => statusMsg.Update(s);
+                    Action<long, bool> updateProgress = (rowCount, isCancelled) =>
+                    {
+                        table.RowCount = rowCount + batchRows;
+                        table.Status = isCancelled ? ExportStatus.Cancelled : ExportStatus.Exporting;
+                        statusMsg.Update($"Exporting Table {tableCnt} of {totalTables} : {table.DaxName} ({rowCount + batchRows:N0} rows)");
+                        Document.RefreshElapsedTime();
+                    };
+                    Func<bool> isCancelRequested = () => CancelRequested;
+
+
+                    using (var reader = connRead.ExecuteReader(daxQuery, null))
+                    {
+
+                        // Write data
+                        await ParquetExporter.ExportDataReaderToBuffersAsync(parquetWriter, reader, updateStatus, updateProgress, isCancelRequested, rowBuffer, fields);
+
+                        if (table.RowCount % bufferRowCount == 0 || table.RowCount == table.TotalRows)
+                        {
+                            await ParquetExporter.WriteRowGroupToParquet(parquetWriter, rowBuffer, fields);
+                            rowBuffer = ParquetExporter.ResetBuffers(fields, bufferRowCount);
+                        }
+
+                        Document.RefreshElapsedTime();
+
+
+                        // if cancel has been requested do not write any more files
+                        if (CancelRequested)
+                        {
+                            await EventAggregator.PublishOnUIThreadAsync(new OutputMessage(MessageType.Warning, "Data Export Cancelled"));
+                            table.Status = ExportStatus.Cancelled;
+                            MarkWaitingTablesAsSkipped();
+
+                            // break out of foreach table loop
+                            break;
+                        }
+                    }
+
+                    // do not loop around if the current connection does not support TOPNSKIP
+                    if (!connRead.AllFunctions.Contains("TOPNSKIP")) break;
+
+                    if (CancelRequested)
+                    {
+                        MarkWaitingTablesAsSkipped();
+                        table.Status = ExportStatus.Cancelled;
+                        break;
+
+                    }
+                } // end of batch
+            }
+
+            rowBuffer = ParquetExporter.ResetBuffers(fields,bufferRowCount);
+
+            await EventAggregator.PublishOnUIThreadAsync(new OutputMessage(MessageType.Information, ExportTableMsg.Format(table.RowCount, table.RowCount == 1 ? "" : "s", table.DaxName + ".parquet")));
+
+            if (CancelRequested)
+            {
+                MarkWaitingTablesAsSkipped();
+                return false;
+
+            }
+            
+
+            return true;
+        }
+
+
 
         private bool _cancelRequested;
         public bool CancelRequested { get => _cancelRequested;

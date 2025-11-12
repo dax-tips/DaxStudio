@@ -30,6 +30,7 @@ namespace DaxStudio.Interfaces
         string SelectedModelName { get; }
 
         ADOTabular.AdomdClientWrappers.AdomdDataReader ExecuteReader(string query, List<Adomd.AdomdParameter> paramList);
+        ADOTabular.AdomdClientWrappers.AdomdDataReader ExecuteReaderForPrepare(string query, List<Adomd.AdomdParameter> paramList);
         DataTable ExecuteDaxQueryDataTable(string query);
         ServerType ServerType { get; }
         Adomd.AccessToken AccessToken { get; }
