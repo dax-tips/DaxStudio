@@ -1342,8 +1342,13 @@ namespace ADOTabular
         public void Visit(ADOTabularFunctionGroupCollection functionGroups)
         {
             if (functionGroups == null) throw new ArgumentNullException(nameof(functionGroups));
-            var catalogRestriction = new AdomdRestriction("CATALOG_NAME", _conn.Database.Name);
-            var restrictions = new AdomdRestrictionCollection { catalogRestriction };
+            if (_conn == null) throw new InvalidOperationException("ADOTabularConnection is not initialized.");
+            AdomdRestrictionCollection restrictions = null;
+            if (int.TryParse(_conn.Database.CompatibilityLevel, out int compatibilityLevel) && compatibilityLevel >= 1702) // 1702 is when User Defined Functions were introduced
+            {
+                var catalogRestriction = new AdomdRestriction("CATALOG_NAME", _conn.Database.Name);
+                restrictions = new AdomdRestrictionCollection { catalogRestriction };
+            }
             DataRow[] drFuncs = _conn.GetSchemaDataSet("MDSCHEMA_FUNCTIONS", restrictions, false).Tables[0].Select("ORIGIN = 2 OR ORIGIN = 3 OR ORIGIN = 4");
             foreach (DataRow dr in drFuncs)
             {
