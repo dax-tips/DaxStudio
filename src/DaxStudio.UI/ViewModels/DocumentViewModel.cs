@@ -100,6 +100,7 @@ namespace DaxStudio.UI.ViewModels
         , IHandle<SetSelectedWorksheetEvent>
         , IHandle<ShowMeasureExpressionEditor>
         , IHandle<ShowTraceWindowEvent>
+        , IHandle<ShowToolWindowEvent>
         , IHandle<TraceWatcherToggleEvent>
         , IHandle<TraceChangedEvent>
         , IHandle<TraceChangingEvent>
@@ -4382,6 +4383,17 @@ namespace DaxStudio.UI.ViewModels
         public Task HandleAsync(ShowTraceWindowEvent message, CancellationToken cancellationToken)
         {
             if (!ToolWindows.Contains(message.TraceWatcher)) ToolWindows.Add(message.TraceWatcher);
+            return Task.CompletedTask;
+        }
+
+        public Task HandleAsync(ShowToolWindowEvent message, CancellationToken cancellationToken)
+        {
+            if (!ToolWindows.Contains(message.ToolWindow)) ToolWindows.Add(message.ToolWindow);
+            // Activate the tool window to bring it to the front
+            if (message.ToolWindow is ToolWindowBase twb)
+            {
+                twb.Activate();
+            }
             return Task.CompletedTask;
         }
 

@@ -1786,6 +1786,7 @@ namespace DaxStudio.UI.ViewModels
             NotifyOfPropertyChange(nameof(StorageEngineEvents));
             NotifyOfPropertyChange(nameof(CanExport));
             NotifyOfPropertyChange(nameof(CanShowTraceDiagnostics));
+            NotifyOfPropertyChange(nameof(CanShowQueryDependencies));
         }
 
         public void Copy()
@@ -1991,6 +1992,33 @@ namespace DaxStudio.UI.ViewModels
 
             });
         }
+
+        /// <summary>
+        /// Shows the Storage Engine Dependencies (ERD) diagram for all SE events.
+        /// Opens as a dockable tool window that can be resized, floated, or maximized.
+        /// </summary>
+        public void ShowQueryDependencies()
+        {
+            try
+            {
+                Log.Information("{class} {method} {message}", nameof(ServerTimesViewModel), nameof(ShowQueryDependencies), $"Starting with {AllStorageEngineEvents.Count} events");
+                
+                var erdViewModel = new XmSqlErdViewModel();
+                erdViewModel.AnalyzeEvents(AllStorageEngineEvents);
+                
+                Log.Information("{class} {method} {message}", nameof(ServerTimesViewModel), nameof(ShowQueryDependencies), $"Analysis complete: {erdViewModel.Tables.Count} tables found");
+                
+                // Publish event to show the tool window in the docking panel
+                _eventAggregator.PublishOnUIThreadAsync(new ShowToolWindowEvent(erdViewModel));
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, Common.Constants.LogMessageTemplate, nameof(ServerTimesViewModel), nameof(ShowQueryDependencies), "Error showing Query Dependencies");
+                _eventAggregator.PublishOnUIThreadAsync(new OutputMessage(MessageType.Error, $"Error showing Storage Engine Dependencies\n{ex.Message}"));
+            }
+        }
+
+        public bool CanShowQueryDependencies => AllStorageEngineEvents.Count > 0;
 
         public bool ShowTimelineOnRows { get => this.StorageEventTimelineStyle != StorageEventTimelineStyle.None; }
 
