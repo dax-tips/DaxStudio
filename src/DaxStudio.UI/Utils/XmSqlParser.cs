@@ -197,12 +197,17 @@ namespace DaxStudio.UI.Utils
         {
             // Determine the join type by looking at what precedes each ON clause
             var onMatches = OnClausePattern.Matches(xmSql);
+            Log.Debug("ParseOnClauses: Found {Count} ON clause matches", onMatches.Count);
+            
             foreach (Match match in onMatches)
             {
                 var fromTable = match.Groups["fromTable"].Value;
                 var fromColumn = match.Groups["fromColumn"].Value;
                 var toTable = match.Groups["toTable"].Value;
                 var toColumn = match.Groups["toColumn"].Value;
+
+                Log.Debug("ParseOnClauses: {FromTable}[{FromCol}] = {ToTable}[{ToCol}]",
+                    fromTable, fromColumn, toTable, toColumn);
 
                 // Determine join type by looking at text before the ON
                 var textBeforeOn = xmSql.Substring(0, match.Index);
@@ -215,10 +220,12 @@ namespace DaxStudio.UI.Utils
                 var fromTableInfo = analysis.GetOrAddTable(fromTable);
                 var fromColumnInfo = fromTableInfo?.GetOrAddColumn(fromColumn);
                 fromColumnInfo?.AddUsage(XmSqlColumnUsage.Join);
+                Log.Debug("  Marked {Table}[{Col}] as Join", fromTable, fromColumn);
 
                 var toTableInfo = analysis.GetOrAddTable(toTable);
                 var toColumnInfo = toTableInfo?.GetOrAddColumn(toColumn);
                 toColumnInfo?.AddUsage(XmSqlColumnUsage.Join);
+                Log.Debug("  Marked {Table}[{Col}] as Join", toTable, toColumn);
             }
         }
 

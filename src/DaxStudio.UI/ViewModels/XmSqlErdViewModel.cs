@@ -2,6 +2,7 @@ using Caliburn.Micro;
 using DaxStudio.UI.Interfaces;
 using DaxStudio.UI.Model;
 using DaxStudio.UI.Utils;
+using Serilog;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
@@ -197,17 +198,28 @@ namespace DaxStudio.UI.ViewModels
         {
             Relationships.Clear();
 
+            Log.Debug("Creating relationship view models. Analysis has {Count} relationships", _analysis.Relationships.Count);
+
             foreach (var rel in _analysis.Relationships)
             {
+                Log.Debug("Processing relationship: {From}.{FromCol} -> {To}.{ToCol}", 
+                    rel.FromTable, rel.FromColumn, rel.ToTable, rel.ToColumn);
+                
                 var fromTable = Tables.FirstOrDefault(t => t.TableName.Equals(rel.FromTable, StringComparison.OrdinalIgnoreCase));
                 var toTable = Tables.FirstOrDefault(t => t.TableName.Equals(rel.ToTable, StringComparison.OrdinalIgnoreCase));
+
+                Log.Debug("  FromTable found: {Found}, ToTable found: {ToFound}", 
+                    fromTable != null, toTable != null);
 
                 if (fromTable != null && toTable != null)
                 {
                     var relVm = new ErdRelationshipViewModel(rel, fromTable, toTable);
                     Relationships.Add(relVm);
+                    Log.Debug("  Added relationship VM. Path: {Path}", relVm.PathData);
                 }
             }
+            
+            Log.Debug("Total relationship VMs created: {Count}", Relationships.Count);
         }
 
         /// <summary>
@@ -239,9 +251,10 @@ namespace DaxStudio.UI.ViewModels
                 Tables[i].Height = tableHeight;
             }
 
-            // Calculate canvas size to fit all tables
-            CanvasWidth = padding * 2 + columns * (tableWidth + horizontalSpacing);
-            CanvasHeight = padding * 2 + rows * (tableHeight + verticalSpacing);
+            // Calculate canvas size to fit all tables (minimum 100x100)
+            // The actual display will expand to fill viewport via MinWidth/MinHeight
+            CanvasWidth = Math.Max(100, padding * 2 + columns * (tableWidth + horizontalSpacing));
+            CanvasHeight = Math.Max(100, padding * 2 + rows * (tableHeight + verticalSpacing));
 
             // Update relationship line positions
             foreach (var rel in Relationships)
@@ -790,17 +803,18 @@ namespace DaxStudio.UI.ViewModels
             : string.Empty;
 
         /// <summary>
-        /// Icon/symbol to display based on column usage.
+        /// Tooltip text explaining the column usage icons.
         /// </summary>
-        public string UsageIcon
+        public string UsageTooltip
         {
             get
             {
-                if (IsJoinColumn) return "🔑";
-                if (IsAggregateColumn) return "📊";
-                if (IsFilterColumn) return "🔍";
-                if (IsSelectColumn) return "✓";
-                return "";
+                var tips = new List<string>();
+                if (IsJoinColumn) tips.Add("🔑 Join Key");
+                if (IsFilterColumn) tips.Add("🔍 Filter");
+                if (IsAggregateColumn) tips.Add("📊 Aggregate (" + AggregationText + ")");
+                if (IsSelectColumn) tips.Add("✓ Selected");
+                return tips.Count > 0 ? string.Join("\n", tips) : "No usage detected";
             }
         }
     }
@@ -925,8 +939,11 @@ namespace DaxStudio.UI.ViewModels
             get
             {
                 // Calculate control points for a smooth bezier curve
+                // Use InvariantCulture to ensure decimal points (not commas) are used
                 double midX = (StartX + EndX) / 2;
-                return $"M {StartX},{StartY} C {midX},{StartY} {midX},{EndY} {EndX},{EndY}";
+                return string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "M {0},{1} C {2},{3} {4},{5} {6},{7}",
+                    StartX, StartY, midX, StartY, midX, EndY, EndX, EndY);
             }
         }
 

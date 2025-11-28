@@ -353,5 +353,67 @@ FROM 'Sales'
             Assert.AreEqual(1, analysis.Tables.Count);
             Assert.AreEqual(3, analysis.Tables["Product"].HitCount);
         }
+
+        [TestMethod]
+        public void ParseTimeIntelligenceQueryWithJoinAndFilter()
+        {
+            // Arrange - exact query from user testing
+            string xmSql = @"DEFINE TABLE '$TTable5' :=
+SELECT
+    'Calendar'[Date],
+    'Time Intelligence'[Period]
+FROM 'Time Intelligence'
+    LEFT OUTER JOIN 'Calendar'
+        ON 'Time Intelligence'[Date]='Calendar'[Date]
+WHERE
+    'Time Intelligence'[Period] NIN ( 'Current Year' ) ,";
+
+            var analysis = new XmSqlAnalysis();
+
+            // Act
+            var result = _parser.ParseQuery(xmSql, analysis);
+
+            // Assert
+            Assert.IsTrue(result);
+            
+            // Should have 3 tables: $TTable5, Calendar, Time Intelligence
+            // But $TTable5 is an intermediate table
+            Assert.IsTrue(analysis.Tables.ContainsKey("Calendar"));
+            Assert.IsTrue(analysis.Tables.ContainsKey("Time Intelligence"));
+            
+            // Check Time Intelligence table
+            var timeIntelligenceTable = analysis.Tables["Time Intelligence"];
+            Assert.IsTrue(timeIntelligenceTable.IsFromTable);
+            Assert.IsTrue(timeIntelligenceTable.Columns.ContainsKey("Date"));
+            Assert.IsTrue(timeIntelligenceTable.Columns.ContainsKey("Period"));
+            
+            // Date should be marked as Join (in ON clause)
+            Assert.IsTrue(timeIntelligenceTable.Columns["Date"].UsageTypes.HasFlag(XmSqlColumnUsage.Join), 
+                "Time Intelligence[Date] should be marked as Join column");
+            
+            // Period should be marked as Select and Filter
+            Assert.IsTrue(timeIntelligenceTable.Columns["Period"].UsageTypes.HasFlag(XmSqlColumnUsage.Select),
+                "Time Intelligence[Period] should be marked as Select column");
+            Assert.IsTrue(timeIntelligenceTable.Columns["Period"].UsageTypes.HasFlag(XmSqlColumnUsage.Filter),
+                "Time Intelligence[Period] should be marked as Filter column");
+            
+            // Check Calendar table
+            var calendarTable = analysis.Tables["Calendar"];
+            Assert.IsTrue(calendarTable.IsJoinedTable);
+            Assert.IsTrue(calendarTable.Columns.ContainsKey("Date"));
+            
+            // Calendar Date should also be marked as Join (in ON clause)
+            Assert.IsTrue(calendarTable.Columns["Date"].UsageTypes.HasFlag(XmSqlColumnUsage.Join),
+                "Calendar[Date] should be marked as Join column");
+            
+            // Check relationship exists
+            Assert.AreEqual(1, analysis.Relationships.Count);
+            var rel = analysis.Relationships[0];
+            Assert.AreEqual("Time Intelligence", rel.FromTable);
+            Assert.AreEqual("Date", rel.FromColumn);
+            Assert.AreEqual("Calendar", rel.ToTable);
+            Assert.AreEqual("Date", rel.ToColumn);
+            Assert.AreEqual(XmSqlJoinType.LeftOuterJoin, rel.JoinType);
+        }
     }
 }
