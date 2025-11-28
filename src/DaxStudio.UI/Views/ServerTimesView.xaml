@@ -41,7 +41,7 @@
             <conv:TimelineMarginConverter x:Key="TimelineMarginConverter"/>
             <conv:ObjectToBooleanConverter x:Key="ObjectToBooleanConverter"/>
 
-            <controls:BindingProxy x:Key="ShowObjectName" Data="{Binding ShowObjectName, Converter={StaticResource BoolToCollapsedConverter}}"/>
+            <controls:BindingProxy x:Key="ShowObjectName" Data="{Binding ShowObjectName, Converter={StaticResource BoolToCollapsedConverter}, FallbackValue={x:Static Visibility.Collapsed}}"/>
 
             <Style x:Key="TraceButton" BasedOn="{StaticResource {x:Type Button}}" TargetType="Button">
                 <Setter Property="Background" Value="{DynamicResource Theme.Brush.MenuBar.Back}"/>
@@ -702,7 +702,6 @@
                   AlternationCount="2"
                   AlternatingRowBackground="{DynamicResource Theme.Brush.Table.Alternate}"
                   Background="{DynamicResource Theme.Brush.Content.Back}"
-                  behaviours:GridViewColumnResize.Enabled="True" 
                   VerticalAlignment="Stretch" 
                   Width="Auto"
                   ItemsSource="{Binding StorageEngineEvents}" 
