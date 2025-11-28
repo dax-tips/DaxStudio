@@ -137,6 +137,27 @@ namespace DaxStudio.UI.Model
         public int HitCount { get; set; }
 
         /// <summary>
+        /// Total estimated rows scanned across all SE queries referencing this table.
+        /// </summary>
+        public long TotalEstimatedRows { get; set; }
+
+        /// <summary>
+        /// Maximum estimated rows from a single SE query for this table.
+        /// Useful for identifying expensive individual scans.
+        /// </summary>
+        public long MaxEstimatedRows { get; set; }
+
+        /// <summary>
+        /// Total duration (ms) of all SE queries referencing this table.
+        /// </summary>
+        public long TotalDurationMs { get; set; }
+
+        /// <summary>
+        /// Maximum duration (ms) of a single SE query for this table.
+        /// </summary>
+        public long MaxDurationMs { get; set; }
+
+        /// <summary>
         /// Whether this table appeared in a FROM clause (base table).
         /// </summary>
         public bool IsFromTable { get; set; }

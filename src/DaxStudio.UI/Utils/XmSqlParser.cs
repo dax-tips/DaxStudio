@@ -134,13 +134,21 @@ namespace DaxStudio.UI.Utils
             public string SourceColumn { get; set; }
         }
 
+        // Stores the estimated rows for the current query being parsed
+        private long? _currentQueryEstimatedRows;
+        
+        // Stores the duration for the current query being parsed
+        private long? _currentQueryDurationMs;
+
         /// <summary>
         /// Parses a single xmSQL query and adds the results to the analysis.
         /// </summary>
         /// <param name="xmSql">The xmSQL query text to parse.</param>
         /// <param name="analysis">The analysis object to add results to.</param>
+        /// <param name="estimatedRows">Optional estimated rows returned by this SE query.</param>
+        /// <param name="durationMs">Optional duration in milliseconds of this SE query.</param>
         /// <returns>True if parsing was successful, false otherwise.</returns>
-        public bool ParseQuery(string xmSql, XmSqlAnalysis analysis)
+        public bool ParseQuery(string xmSql, XmSqlAnalysis analysis, long? estimatedRows = null, long? durationMs = null)
         {
             if (string.IsNullOrWhiteSpace(xmSql))
                 return false;
@@ -148,6 +156,8 @@ namespace DaxStudio.UI.Utils
             try
             {
                 analysis.TotalSEQueriesAnalyzed++;
+                _currentQueryEstimatedRows = estimatedRows;
+                _currentQueryDurationMs = durationMs;
 
                 // Initialize lineage tracking for this query
                 _tempTableLineage = new Dictionary<string, TempTableLineage>(StringComparer.OrdinalIgnoreCase);
@@ -210,6 +220,26 @@ namespace DaxStudio.UI.Utils
                 {
                     table.IsFromTable = true;
                     table.HitCount++;
+                    
+                    // Track estimated rows for this table
+                    if (_currentQueryEstimatedRows.HasValue && _currentQueryEstimatedRows.Value > 0)
+                    {
+                        table.TotalEstimatedRows += _currentQueryEstimatedRows.Value;
+                        if (_currentQueryEstimatedRows.Value > table.MaxEstimatedRows)
+                        {
+                            table.MaxEstimatedRows = _currentQueryEstimatedRows.Value;
+                        }
+                    }
+                    
+                    // Track duration for this table
+                    if (_currentQueryDurationMs.HasValue && _currentQueryDurationMs.Value > 0)
+                    {
+                        table.TotalDurationMs += _currentQueryDurationMs.Value;
+                        if (_currentQueryDurationMs.Value > table.MaxDurationMs)
+                        {
+                            table.MaxDurationMs = _currentQueryDurationMs.Value;
+                        }
+                    }
                 }
             }
         }
@@ -246,8 +276,6 @@ namespace DaxStudio.UI.Utils
                     }
 
                     var table = analysis.GetOrAddTable(tableName);
-                    if (table != null)
-                    {
                     if (table != null)
                     {
                         var column = table.GetOrAddColumn(columnName);

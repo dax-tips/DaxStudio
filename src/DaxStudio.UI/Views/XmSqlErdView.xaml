@@ -42,11 +42,23 @@
                         MouseLeftButtonDown="Table_MouseLeftButtonDown"
                         MouseLeftButtonUp="Table_MouseLeftButtonUp"
                         MouseMove="Table_MouseMove">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Opacity" Value="1"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsSearchMatch}" Value="False">
+                                    <Setter Property="Opacity" Value="0.35"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
                     <Border.Effect>
                         <DropShadowEffect x:Name="Shadow" BlurRadius="8" ShadowDepth="2" Opacity="0.3" Direction="315"/>
                     </Border.Effect>
                     <Grid>
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
@@ -55,20 +67,47 @@
                         <Border Grid.Row="0" 
                                 CornerRadius="4,4,0,0"
                                 Padding="8,4"
-                                Background="{Binding HeatColor}">
+                                Background="{Binding HeatColor}"
+                                MouseLeftButtonDown="TableHeader_MouseLeftButtonDown"
+                                Cursor="Hand"
+                                ToolTip="Click for table details, double-click to toggle collapse">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 
-                                <!-- Table Icon -->
-                                <TextBlock Grid.Column="0" 
-                                           Text="📊" 
-                                           FontSize="12" 
-                                           Margin="0,0,6,0"
-                                           VerticalAlignment="Center"/>
+                                <!-- Collapse/Expand Toggle -->
+                                <Border Grid.Column="0" 
+                                        Background="Transparent" 
+                                        Cursor="Hand"
+                                        Margin="0,0,4,0"
+                                        MouseLeftButtonDown="CollapseToggle_MouseLeftButtonDown"
+                                        ToolTip="Toggle collapse">
+                                    <Path Width="10" Height="10" Stretch="Uniform" Fill="White">
+                                        <Path.Style>
+                                            <Style TargetType="Path">
+                                                <Setter Property="Data" Value="M0,0 L8,4 L0,8 Z"/>
+                                                <Setter Property="RenderTransform">
+                                                    <Setter.Value>
+                                                        <RotateTransform Angle="90" CenterX="5" CenterY="5"/>
+                                                    </Setter.Value>
+                                                </Setter>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsCollapsed}" Value="True">
+                                                        <Setter Property="RenderTransform">
+                                                            <Setter.Value>
+                                                                <RotateTransform Angle="0" CenterX="5" CenterY="5"/>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Path.Style>
+                                    </Path>
+                                </Border>
                                 
                                 <!-- Table Name -->
                                 <TextBlock Grid.Column="1"
@@ -95,17 +134,140 @@
                             </Grid>
                         </Border>
                         
-                        <!-- Columns List -->
-                        <ScrollViewer Grid.Row="1" 
+                        <!-- Row Count Info (shown if data available) -->
+                        <Border Grid.Row="1"
+                                Padding="8,2"
+                                Visibility="{Binding HasRowCountData, Converter={StaticResource BoolToCollapsedConverter}}"
+                                Background="{DynamicResource Theme.Brush.MenuBar.Back}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Rows: " FontSize="10" 
+                                           Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                                           VerticalAlignment="Center"/>
+                                <TextBlock Text="{Binding TotalRowsFormatted}" 
+                                           FontSize="10" FontWeight="SemiBold"
+                                           VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{DynamicResource Theme.Brush.Default.Fore}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HasHighRowCount}" Value="True">
+                                                    <Setter Property="Foreground" Value="#E65100"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text=" ⚠" FontSize="10" Foreground="#E65100"
+                                           Visibility="{Binding HasHighRowCount, Converter={StaticResource BoolToCollapsedConverter}}"
+                                           ToolTip="High row count (100K+) may indicate performance concerns"
+                                           VerticalAlignment="Center"/>
+                                
+                                <!-- Duration info inline with row count -->
+                                <TextBlock Text="  |  " FontSize="10" 
+                                           Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                                           Visibility="{Binding HasDurationData, Converter={StaticResource BoolToCollapsedConverter}}"
+                                           VerticalAlignment="Center"/>
+                                <TextBlock Text="Duration: " FontSize="10" 
+                                           Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                                           Visibility="{Binding HasDurationData, Converter={StaticResource BoolToCollapsedConverter}}"
+                                           VerticalAlignment="Center"/>
+                                <TextBlock Text="{Binding TotalDurationFormatted}" 
+                                           FontSize="10" FontWeight="SemiBold"
+                                           Visibility="{Binding HasDurationData, Converter={StaticResource BoolToCollapsedConverter}}"
+                                           VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{DynamicResource Theme.Brush.Default.Fore}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HasHighDuration}" Value="True">
+                                                    <Setter Property="Foreground" Value="#C62828"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text=" ⏱" FontSize="10" Foreground="#C62828"
+                                           Visibility="{Binding HasHighDuration, Converter={StaticResource BoolToCollapsedConverter}}"
+                                           ToolTip="High duration (1s+) may indicate performance concerns"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                        
+                        <!-- Duration-only row (when no row count data but has duration) -->
+                        <Border Grid.Row="2"
+                                Padding="8,2"
+                                Background="{DynamicResource Theme.Brush.MenuBar.Back}">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding HasRowCountData}" Value="False"/>
+                                                <Condition Binding="{Binding HasDurationData}" Value="True"/>
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Duration: " FontSize="10" 
+                                           Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                                           VerticalAlignment="Center"/>
+                                <TextBlock Text="{Binding TotalDurationFormatted}" 
+                                           FontSize="10" FontWeight="SemiBold"
+                                           VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{DynamicResource Theme.Brush.Default.Fore}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HasHighDuration}" Value="True">
+                                                    <Setter Property="Foreground" Value="#C62828"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text=" ⏱" FontSize="10" Foreground="#C62828"
+                                           Visibility="{Binding HasHighDuration, Converter={StaticResource BoolToCollapsedConverter}}"
+                                           ToolTip="High duration (1s+) may indicate performance concerns"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                        
+                        <!-- Columns List (collapsible) -->
+                        <ScrollViewer Grid.Row="3" 
                                       VerticalScrollBarVisibility="Auto"
                                       MaxHeight="120">
+                            <ScrollViewer.Style>
+                                <Style TargetType="ScrollViewer">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsCollapsed}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ScrollViewer.Style>
                             <ItemsControl ItemsSource="{Binding Columns}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate DataType="{x:Type vm:ErdColumnViewModel}">
-                                        <Border Style="{StaticResource ColumnItemStyle}">
+                                        <Border MouseLeftButtonDown="Column_MouseLeftButtonDown"
+                                                Cursor="Hand">
+                                            <Border.Style>
+                                                <Style TargetType="Border" BasedOn="{StaticResource ColumnItemStyle}">
+                                                    <Setter Property="Opacity" Value="1"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsSearchMatch}" Value="False">
+                                                            <Setter Property="Opacity" Value="0.4"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="20"/>
+                                                    <ColumnDefinition Width="Auto" MinWidth="12"/>
                                                     <ColumnDefinition Width="*"/>
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
@@ -114,22 +276,23 @@
                                                 <StackPanel Grid.Column="0" 
                                                             Orientation="Horizontal" 
                                                             VerticalAlignment="Center"
+                                                            Margin="2,0,4,0"
                                                             ToolTip="{Binding UsageTooltip}">
                                                     <!-- Key icon for Join (golden key shape) -->
                                                     <Path Data="M6,0 L6,4 L8,4 L8,6 L6,6 L6,8 L4,8 L4,6 L0,6 L0,4 L4,4 L4,0 Z M5,1 A2,2 0 1,0 5,3 A2,2 0 1,0 5,1"
-                                                          Fill="#DAA520" Width="10" Height="10" Stretch="Uniform" Margin="0,0,2,0"
+                                                          Fill="#DAA520" Width="12" Height="12" Stretch="Uniform" Margin="0,0,2,0"
                                                           Visibility="{Binding IsJoinColumn, Converter={StaticResource BoolToCollapsedConverter}}"/>
                                                     <!-- Funnel/Filter icon (purple) -->
                                                     <Path Data="M0,0 L10,0 L6,5 L6,9 L4,10 L4,5 Z"
-                                                          Fill="#9932CC" Width="10" Height="10" Stretch="Uniform" Margin="0,0,2,0"
+                                                          Fill="#9932CC" Width="12" Height="12" Stretch="Uniform" Margin="0,0,2,0"
                                                           Visibility="{Binding IsFilterColumn, Converter={StaticResource BoolToCollapsedConverter}}"/>
                                                     <!-- Sum/Sigma icon (blue) -->
                                                     <Path Data="M0,0 L8,0 L8,2 L3,2 L6,5 L3,8 L8,8 L8,10 L0,10 L0,8 L4,5 L0,2 Z"
-                                                          Fill="#1E90FF" Width="10" Height="10" Stretch="Uniform" Margin="0,0,2,0"
+                                                          Fill="#1E90FF" Width="12" Height="12" Stretch="Uniform" Margin="0,0,2,0"
                                                           Visibility="{Binding IsAggregateColumn, Converter={StaticResource BoolToCollapsedConverter}}"/>
                                                     <!-- Checkmark icon (green) -->
                                                     <Path Data="M0,5 L3,8 L9,2 L10,3 L3,10 L-1,6 Z"
-                                                          Fill="#32CD32" Width="10" Height="10" Stretch="Uniform" Margin="0,0,2,0"
+                                                          Fill="#32CD32" Width="12" Height="12" Stretch="Uniform" Margin="0,0,2,0"
                                                           Visibility="{Binding IsSelectColumn, Converter={StaticResource BoolToCollapsedConverter}}"/>
                                                 </StackPanel>
                                                 
@@ -138,6 +301,7 @@
                                                            Text="{Binding ColumnName}"
                                                            FontSize="11"
                                                            Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                                                           Opacity="0.9"
                                                            TextTrimming="CharacterEllipsis"
                                                            VerticalAlignment="Center"
                                                            ToolTip="{Binding ColumnName}">
@@ -192,6 +356,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         
         <!-- Toolbar -->
@@ -208,9 +373,47 @@
                            VerticalAlignment="Center"
                            Margin="10,8"/>
                 
+                <!-- Search Box -->
+                <Border DockPanel.Dock="Left" 
+                        Margin="20,6,10,6"
+                        BorderBrush="{DynamicResource Theme.Brush.Table.Border}"
+                        BorderThickness="1"
+                        CornerRadius="3"
+                        Background="{DynamicResource Theme.Brush.Content.Back}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="150"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="🔍" Margin="6,0,4,0" VerticalAlignment="Center" Opacity="0.6"/>
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                 BorderThickness="0"
+                                 Background="Transparent"
+                                 VerticalAlignment="Center"
+                                 Padding="0,4"/>
+                        <Button Grid.Column="2" 
+                                Content="✕" 
+                                FontSize="10"
+                                Padding="4,2"
+                                Margin="2"
+                                Visibility="{Binding SearchText.Length, Converter={StaticResource BoolToCollapsedConverter}}"
+                                cal:Message.Attach="[Event Click] = [Action ClearSearch]"
+                                ToolTip="Clear search"/>
+                    </Grid>
+                </Border>
+                
+                <Button DockPanel.Dock="Right"
+                        Content="Export Image"
+                        Margin="4,8,8,8"
+                        Padding="12,4"
+                        cal:Message.Attach="[Event Click] = [Action ExportToImage]"
+                        ToolTip="Export diagram as PNG image"/>
+                
                 <Button DockPanel.Dock="Right"
                         Content="Clear Selection"
-                        Margin="4,8,8,8"
+                        Margin="4,8"
                         Padding="12,4"
                         cal:Message.Attach="[Event Click] = [Action ClearSelection]"/>
                 
@@ -219,6 +422,20 @@
                         Margin="4,8"
                         Padding="12,4"
                         cal:Message.Attach="[Event Click] = [Action CopyToClipboard]"/>
+                
+                <Button DockPanel.Dock="Right"
+                        Content="Collapse All"
+                        Margin="4,8"
+                        Padding="12,4"
+                        cal:Message.Attach="[Event Click] = [Action CollapseAll]"
+                        ToolTip="Collapse all tables to headers only"/>
+                
+                <Button DockPanel.Dock="Right"
+                        Content="Expand All"
+                        Margin="4,8"
+                        Padding="12,4"
+                        cal:Message.Attach="[Event Click] = [Action ExpandAll]"
+                        ToolTip="Expand all tables to show columns"/>
             </DockPanel>
         </ctrl:ClipBorder>
         
@@ -228,12 +445,50 @@
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto"
                       Background="{DynamicResource Theme.Brush.Content.Back}">
-            <Grid MinWidth="{Binding ActualWidth, ElementName=MainScrollViewer}"
+            <Grid x:Name="DiagramCanvas"
+                  MinWidth="{Binding ActualWidth, ElementName=MainScrollViewer}"
                   MinHeight="{Binding ActualHeight, ElementName=MainScrollViewer}"
                   Width="{Binding CanvasWidth}" 
                   Height="{Binding CanvasHeight}"
                   MouseLeftButtonDown="Canvas_MouseLeftButtonDown"
                   Background="{DynamicResource Theme.Brush.Content.Back}">
+                
+                <!-- Context Menu for Canvas -->
+                <Grid.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Auto-Arrange Layout" cal:Message.Attach="[Event Click] = [Action ResetLayout]">
+                            <MenuItem.Icon>
+                                <Path Data="M3,3 L10,3 L10,10 L3,10 Z M13,3 L20,3 L20,10 L13,10 Z M3,13 L10,13 L10,20 L3,20 Z M13,13 L20,13 L20,20 L13,20 Z" 
+                                      Fill="{DynamicResource Theme.Brush.Default.Fore}" Stretch="Uniform" Width="16" Height="16"/>
+                            </MenuItem.Icon>
+                        </MenuItem>
+                        <Separator/>
+                        <MenuItem Header="Collapse All Tables" cal:Message.Attach="[Event Click] = [Action CollapseAll]"/>
+                        <MenuItem Header="Expand All Tables" cal:Message.Attach="[Event Click] = [Action ExpandAll]"/>
+                        <Separator/>
+                        <MenuItem Header="Clear Selection" cal:Message.Attach="[Event Click] = [Action ClearSelection]"/>
+                        <MenuItem Header="Clear Details Panel" cal:Message.Attach="[Event Click] = [Action ClearDetailSelection]"/>
+                        <Separator/>
+                        <MenuItem Header="Export to Image..." cal:Message.Attach="[Event Click] = [Action ExportToImage]">
+                            <MenuItem.Icon>
+                                <Path Data="M19,19H5V5H19M19,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M13.96,12.29L11.21,15.83L9.25,13.47L6.5,17H17.5L13.96,12.29Z" 
+                                      Fill="{DynamicResource Theme.Brush.Default.Fore}" Stretch="Uniform" Width="16" Height="16"/>
+                            </MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="Copy Summary to Clipboard" cal:Message.Attach="[Event Click] = [Action CopyToClipboard]">
+                            <MenuItem.Icon>
+                                <Path Data="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z" 
+                                      Fill="{DynamicResource Theme.Brush.Default.Fore}" Stretch="Uniform" Width="16" Height="16"/>
+                            </MenuItem.Icon>
+                        </MenuItem>
+                        <Separator/>
+                        <MenuItem Header="Zoom">
+                            <MenuItem Header="Zoom In" cal:Message.Attach="[Event Click] = [Action ZoomIn]"/>
+                            <MenuItem Header="Zoom Out" cal:Message.Attach="[Event Click] = [Action ZoomOut]"/>
+                            <MenuItem Header="Reset Zoom" cal:Message.Attach="[Event Click] = [Action ResetZoom]"/>
+                        </MenuItem>
+                    </ContextMenu>
+                </Grid.ContextMenu>
                 
                 <!-- Relationship Lines Layer (behind tables) -->
                 <ItemsControl ItemsSource="{Binding Relationships}">
@@ -256,6 +511,8 @@
                                 <!-- Relationship Line -->
                                 <Path StrokeThickness="2"
                                       StrokeDashArray="4 2"
+                                      Cursor="Hand"
+                                      MouseLeftButtonDown="Relationship_MouseLeftButtonDown"
                                       Data="{Binding PathData}">
                                     <Path.Style>
                                         <Style TargetType="Path">
@@ -407,8 +664,33 @@
             </Grid>
         </ctrl:ClipBorder>
         
+        <!-- Detail Panel (shows when column or relationship is clicked) -->
+        <ctrl:ClipBorder Grid.Row="3"
+                         CornerRadius="4"
+                         Background="{DynamicResource Theme.Brush.MenuBar.Back}"
+                         Margin="0,8,0,0"
+                         Visibility="{Binding HasSelectedDetail, Converter={StaticResource BoolToCollapsedConverter}}">
+            <Grid Margin="10,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding SelectedDetailInfo}"
+                           Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                           FontFamily="Consolas"
+                           FontSize="12"/>
+                <Button Grid.Column="1"
+                        Content="✕"
+                        FontSize="10"
+                        Width="20" Height="20"
+                        VerticalAlignment="Top"
+                        cal:Message.Attach="[Event Click] = [Action ClearDetailSelection]"
+                        ToolTip="Close details"/>
+            </Grid>
+        </ctrl:ClipBorder>
+        
         <!-- Loading Overlay -->
-        <Grid Grid.RowSpan="3"
+        <Grid Grid.RowSpan="4"
               Visibility="{Binding IsLoading, Converter={StaticResource BoolToCollapsedConverter}}"
               Background="#80000000">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">

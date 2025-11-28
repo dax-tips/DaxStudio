@@ -83,6 +83,90 @@ namespace DaxStudio.UI.ViewModels
         /// </summary>
         public bool NoData => !HasData;
 
+        private string _searchText = string.Empty;
+        /// <summary>
+        /// Search text for filtering tables/columns.
+        /// </summary>
+        public string SearchText
+        {
+            get => _searchText;
+            set
+            {
+                _searchText = value;
+                NotifyOfPropertyChange();
+                ApplySearchFilter();
+            }
+        }
+        
+        /// <summary>
+        /// Clears the search text.
+        /// </summary>
+        public void ClearSearch()
+        {
+            SearchText = string.Empty;
+        }
+        
+        /// <summary>
+        /// Collapses all tables to show only headers.
+        /// </summary>
+        public void CollapseAll()
+        {
+            foreach (var table in Tables)
+            {
+                table.IsCollapsed = true;
+            }
+        }
+        
+        /// <summary>
+        /// Expands all tables to show columns.
+        /// </summary>
+        public void ExpandAll()
+        {
+            foreach (var table in Tables)
+            {
+                table.IsCollapsed = false;
+            }
+        }
+        
+        /// <summary>
+        /// Applies the search filter to highlight matching tables/columns.
+        /// </summary>
+        private void ApplySearchFilter()
+        {
+            var search = _searchText?.Trim() ?? string.Empty;
+            var hasSearch = !string.IsNullOrEmpty(search);
+            
+            foreach (var table in Tables)
+            {
+                if (!hasSearch)
+                {
+                    // No search - clear all search highlighting
+                    table.IsSearchMatch = false;
+                    table.IsSearchDimmed = false;
+                    foreach (var col in table.Columns)
+                    {
+                        col.IsSearchMatch = false;
+                    }
+                }
+                else
+                {
+                    // Check if table name matches
+                    var tableMatches = table.TableName.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0;
+                    
+                    // Check if any column matches
+                    var anyColumnMatches = false;
+                    foreach (var col in table.Columns)
+                    {
+                        col.IsSearchMatch = col.ColumnName.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0;
+                        if (col.IsSearchMatch) anyColumnMatches = true;
+                    }
+                    
+                    table.IsSearchMatch = tableMatches || anyColumnMatches;
+                    table.IsSearchDimmed = !table.IsSearchMatch;
+                }
+            }
+        }
+
         private bool _isLoading;
         public bool IsLoading
         {
@@ -128,7 +212,7 @@ namespace DaxStudio.UI.ViewModels
                     // Only parse scan events that have query text
                     if (evt.IsScanEvent && !string.IsNullOrWhiteSpace(evt.Query))
                     {
-                        _parser.ParseQuery(evt.Query, _analysis);
+                        _parser.ParseQuery(evt.Query, _analysis, evt.EstimatedRows, evt.Duration);
                     }
                 }
 
@@ -223,43 +307,164 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
-        /// Lays out the tables on the canvas using a simple algorithm.
+        /// Lays out the tables on the canvas using a relationship-aware algorithm.
+        /// Tables connected by relationships are placed closer together.
+        /// Fact tables (many relationships) go in center, dimension tables around them.
         /// </summary>
         private void LayoutDiagram()
         {
             if (Tables.Count == 0) return;
 
-            const double tableWidth = 180;
-            const double tableHeight = 150;
-            const double horizontalSpacing = 60;
-            const double verticalSpacing = 40;
-            const double padding = 20;
+            const double tableWidth = 200;
+            const double tableHeight = 180;
+            const double horizontalSpacing = 100;
+            const double verticalSpacing = 60;
+            const double padding = 40;
 
-            // Simple grid layout - calculate how many columns we can fit
-            int columns = Math.Max(1, (int)Math.Ceiling(Math.Sqrt(Tables.Count)));
-            int rows = (int)Math.Ceiling((double)Tables.Count / columns);
+            // Build relationship map to understand connectivity
+            var relationshipMap = BuildRelationshipMap();
 
-            // Position tables in a grid
-            for (int i = 0; i < Tables.Count; i++)
+            // Find fact tables (tables with most relationships) vs dimension tables
+            var tablesByConnections = Tables
+                .OrderByDescending(t => relationshipMap.TryGetValue(t.TableName, out var connections) ? connections.Count : 0)
+                .ThenByDescending(t => t.HitCount)
+                .ToList();
+
+            // Use a star/radial layout for better visualization
+            // Most connected table goes in center, others radiate outward
+            if (Tables.Count == 1)
             {
-                int col = i % columns;
-                int row = i / columns;
-
-                Tables[i].X = padding + col * (tableWidth + horizontalSpacing);
-                Tables[i].Y = padding + row * (tableHeight + verticalSpacing);
-                Tables[i].Width = tableWidth;
-                Tables[i].Height = tableHeight;
+                // Single table - just center it
+                Tables[0].X = padding;
+                Tables[0].Y = padding;
+                Tables[0].Width = tableWidth;
+                Tables[0].Height = tableHeight;
+            }
+            else if (Tables.Count == 2)
+            {
+                // Two tables - place side by side
+                LayoutHorizontal(tablesByConnections, tableWidth, tableHeight, horizontalSpacing, padding);
+            }
+            else
+            {
+                // 3+ tables - use star layout with most connected table in center
+                LayoutStar(tablesByConnections, relationshipMap, tableWidth, tableHeight, horizontalSpacing, verticalSpacing, padding);
             }
 
-            // Calculate canvas size to fit all tables (minimum 100x100)
-            // The actual display will expand to fill viewport via MinWidth/MinHeight
-            CanvasWidth = Math.Max(100, padding * 2 + columns * (tableWidth + horizontalSpacing));
-            CanvasHeight = Math.Max(100, padding * 2 + rows * (tableHeight + verticalSpacing));
+            // Calculate canvas size to fit all tables
+            var maxX = Tables.Max(t => t.X + t.Width);
+            var maxY = Tables.Max(t => t.Y + t.Height);
+            CanvasWidth = Math.Max(100, maxX + padding);
+            CanvasHeight = Math.Max(100, maxY + padding);
 
             // Update relationship line positions
             foreach (var rel in Relationships)
             {
                 rel.UpdatePath();
+            }
+        }
+
+        /// <summary>
+        /// Builds a map of table name to connected table names.
+        /// </summary>
+        private Dictionary<string, HashSet<string>> BuildRelationshipMap()
+        {
+            var map = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            
+            foreach (var rel in _analysis.Relationships)
+            {
+                if (!map.ContainsKey(rel.FromTable))
+                    map[rel.FromTable] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (!map.ContainsKey(rel.ToTable))
+                    map[rel.ToTable] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                
+                map[rel.FromTable].Add(rel.ToTable);
+                map[rel.ToTable].Add(rel.FromTable);
+            }
+            
+            return map;
+        }
+
+        /// <summary>
+        /// Layout tables horizontally in a single row (for small diagrams).
+        /// </summary>
+        private void LayoutHorizontal(List<ErdTableViewModel> tables, double tableWidth, double tableHeight, double spacing, double padding)
+        {
+            double x = padding;
+            foreach (var table in tables)
+            {
+                table.X = x;
+                table.Y = padding;
+                table.Width = tableWidth;
+                table.Height = tableHeight;
+                x += tableWidth + spacing;
+            }
+        }
+
+        /// <summary>
+        /// Layout tables in a star pattern with most connected table(s) in center.
+        /// </summary>
+        private void LayoutStar(List<ErdTableViewModel> tables, Dictionary<string, HashSet<string>> relationshipMap, 
+            double tableWidth, double tableHeight, double hSpacing, double vSpacing, double padding)
+        {
+            // Calculate center position for the most connected table
+            var centerTable = tables[0];
+            var outerTables = tables.Skip(1).ToList();
+            
+            // If there are many tables, arrange them in tiers
+            var tier1 = new List<ErdTableViewModel>(); // Directly connected to center
+            var tier2 = new List<ErdTableViewModel>(); // Not directly connected
+            
+            var centerConnections = relationshipMap.TryGetValue(centerTable.TableName, out var conn) ? conn : new HashSet<string>();
+            
+            foreach (var table in outerTables)
+            {
+                if (centerConnections.Contains(table.TableName))
+                    tier1.Add(table);
+                else
+                    tier2.Add(table);
+            }
+            
+            // Place center table
+            double tier1Radius = tableWidth + hSpacing;
+            double tier2Radius = tier1Radius + tableWidth + hSpacing;
+            
+            // Calculate center based on number of tiers needed
+            double centerX = padding + (tier2.Any() ? tier2Radius : tier1Radius);
+            double centerY = padding + (tier2.Any() ? tier2Radius : tier1Radius);
+            
+            centerTable.X = centerX;
+            centerTable.Y = centerY;
+            centerTable.Width = tableWidth;
+            centerTable.Height = tableHeight;
+            
+            // Place tier 1 tables (directly connected) in a circle around center
+            LayoutInCircle(tier1, centerX + tableWidth/2, centerY + tableHeight/2, tier1Radius, tableWidth, tableHeight);
+            
+            // Place tier 2 tables (not directly connected) in outer circle
+            if (tier2.Any())
+            {
+                LayoutInCircle(tier2, centerX + tableWidth/2, centerY + tableHeight/2, tier2Radius, tableWidth, tableHeight);
+            }
+        }
+
+        /// <summary>
+        /// Layout tables in a circle around a center point.
+        /// </summary>
+        private void LayoutInCircle(List<ErdTableViewModel> tables, double centerX, double centerY, double radius, double tableWidth, double tableHeight)
+        {
+            if (tables.Count == 0) return;
+            
+            double angleStep = 2 * Math.PI / tables.Count;
+            double startAngle = -Math.PI / 2; // Start from top
+            
+            for (int i = 0; i < tables.Count; i++)
+            {
+                double angle = startAngle + i * angleStep;
+                tables[i].X = centerX + radius * Math.Cos(angle) - tableWidth / 2;
+                tables[i].Y = centerY + radius * Math.Sin(angle) - tableHeight / 2;
+                tables[i].Width = tableWidth;
+                tables[i].Height = tableHeight;
             }
         }
 
@@ -315,6 +520,70 @@ namespace DaxStudio.UI.ViewModels
             }
 
             Clipboard.SetText(text.ToString());
+        }
+
+        /// <summary>
+        /// Resets the layout by re-running the layout algorithm.
+        /// Useful after dragging tables around to restore the auto-arranged layout.
+        /// </summary>
+        public void ResetLayout()
+        {
+            if (Tables.Count == 0) return;
+            
+            LayoutDiagram();
+            CalculateHeatLevels();
+        }
+        
+        /// <summary>
+        /// Event raised when export to image is requested.
+        /// The view handles the actual rendering.
+        /// </summary>
+        public event EventHandler<string> ExportRequested;
+        
+        /// <summary>
+        /// Requests export of the diagram to an image file.
+        /// </summary>
+        public void ExportToImage()
+        {
+            var dialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "PNG Image|*.png",
+                Title = "Export Diagram to Image",
+                FileName = "QueryDependencies.png"
+            };
+            
+            if (dialog.ShowDialog() == true)
+            {
+                ExportRequested?.Invoke(this, dialog.FileName);
+            }
+        }
+
+        #endregion
+
+        #region Zoom
+
+        /// <summary>
+        /// Zooms in the diagram by increasing the scale.
+        /// </summary>
+        public void ZoomIn()
+        {
+            Scale = Math.Min(Scale + 0.1, 3.0); // Max 300%
+        }
+
+        /// <summary>
+        /// Zooms out the diagram by decreasing the scale.
+        /// </summary>
+        public void ZoomOut()
+        {
+            Scale = Math.Max(Scale - 0.1, 0.25); // Min 25%
+        }
+
+        /// <summary>
+        /// Resets the zoom level to 100%.
+        /// </summary>
+        public void ResetZoom()
+        {
+            Scale = 1.0;
         }
 
         #endregion
@@ -428,6 +697,113 @@ namespace DaxStudio.UI.ViewModels
         {
             ClearSelectionState();
             SelectedTable = null;
+            SelectedDetailInfo = null;
+        }
+
+        private string _selectedDetailInfo;
+        /// <summary>
+        /// Detail information about the selected item (column or relationship).
+        /// Displayed in a panel when user clicks on a column or relationship.
+        /// </summary>
+        public string SelectedDetailInfo
+        {
+            get => _selectedDetailInfo;
+            set
+            {
+                _selectedDetailInfo = value;
+                NotifyOfPropertyChange();
+                NotifyOfPropertyChange(nameof(HasSelectedDetail));
+            }
+        }
+
+        public bool HasSelectedDetail => !string.IsNullOrEmpty(_selectedDetailInfo);
+
+        /// <summary>
+        /// Shows details for a clicked column.
+        /// </summary>
+        public void SelectColumn(ErdTableViewModel table, ErdColumnViewModel column)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"📊 Column: {table.TableName}[{column.ColumnName}]");
+            sb.AppendLine();
+            sb.AppendLine($"Hit Count: {column.HitCount}");
+            sb.AppendLine();
+            sb.AppendLine("Usage:");
+            if (column.IsJoinColumn) sb.AppendLine("  🔑 Join Key");
+            if (column.IsFilterColumn) sb.AppendLine("  🔍 Filter");
+            if (column.IsAggregateColumn) sb.AppendLine($"  📈 Aggregate ({column.AggregationText})");
+            if (column.IsSelectColumn) sb.AppendLine("  ✓ Selected/Output");
+            
+            // Add table-level row count context
+            if (table.HasRowCountData)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"Table Rows Scanned: {table.TotalRowsFormatted}");
+                if (table.HasHighRowCount)
+                {
+                    sb.AppendLine($"⚠ Max single scan: {table.MaxEstimatedRows:N0} rows");
+                }
+            }
+            
+            SelectedDetailInfo = sb.ToString();
+        }
+
+        /// <summary>
+        /// Shows details for a clicked table header.
+        /// </summary>
+        public void SelectTableDetails(ErdTableViewModel table)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"📊 Table: {table.TableName}");
+            sb.AppendLine();
+            sb.AppendLine($"SE Query Hits: {table.HitCount}");
+            sb.AppendLine($"Columns Used: {table.Columns.Count}");
+            sb.AppendLine();
+            
+            if (table.HasRowCountData)
+            {
+                sb.AppendLine("Row Statistics:");
+                sb.AppendLine($"  Total Rows Scanned: {table.TotalEstimatedRows:N0}");
+                sb.AppendLine($"  Max Single Scan: {table.MaxEstimatedRows:N0}");
+                
+                if (table.HasHighRowCount)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("⚠ High row count detected (100K+ in single scan)");
+                    sb.AppendLine("  Consider adding filters or optimizing the query");
+                }
+            }
+            else
+            {
+                sb.AppendLine("No row count data available");
+            }
+            
+            SelectedDetailInfo = sb.ToString();
+        }
+
+        /// <summary>
+        /// Shows details for a clicked relationship.
+        /// </summary>
+        public void SelectRelationship(ErdRelationshipViewModel relationship)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"🔗 Relationship");
+            sb.AppendLine();
+            sb.AppendLine($"From: {relationship.FromTable}[{relationship.FromColumn}]");
+            sb.AppendLine($"To: {relationship.ToTable}[{relationship.ToColumn}]");
+            sb.AppendLine();
+            sb.AppendLine($"Join Type: {relationship.JoinTypeText}");
+            sb.AppendLine($"Hit Count: {relationship.HitCount}");
+            
+            SelectedDetailInfo = sb.ToString();
+        }
+
+        /// <summary>
+        /// Clears the detail selection.
+        /// </summary>
+        public void ClearDetailSelection()
+        {
+            SelectedDetailInfo = null;
         }
 
         private void ClearSelectionState()
@@ -603,17 +979,164 @@ namespace DaxStudio.UI.ViewModels
             _tableInfo = tableInfo;
             Columns = new BindableCollection<ErdColumnViewModel>(
                 tableInfo.Columns.Values
+                    .Where(c => !IsInternalColumn(c.ColumnName))
                     .OrderByDescending(c => c.UsageTypes.HasFlag(XmSqlColumnUsage.Join))
                     .ThenByDescending(c => c.HitCount)
                     .Select(c => new ErdColumnViewModel(c)));
+        }
+
+        /// <summary>
+        /// Determines if a column is an internal/measure column that should be hidden.
+        /// </summary>
+        private static bool IsInternalColumn(string columnName)
+        {
+            if (string.IsNullOrEmpty(columnName)) return true;
+            
+            // Filter out $Measure0, $Measure1, etc.
+            if (columnName.StartsWith("$Measure", StringComparison.OrdinalIgnoreCase))
+                return true;
+            
+            // Filter out $Expr columns
+            if (columnName.StartsWith("$Expr", StringComparison.OrdinalIgnoreCase))
+                return true;
+            
+            return false;
         }
 
         public string TableName => _tableInfo.TableName;
         public int HitCount => _tableInfo.HitCount;
         public bool IsFromTable => _tableInfo.IsFromTable;
         public bool IsJoinedTable => _tableInfo.IsJoinedTable;
+        
+        /// <summary>
+        /// Total estimated rows scanned for this table across all SE queries.
+        /// </summary>
+        public long TotalEstimatedRows => _tableInfo.TotalEstimatedRows;
+        
+        /// <summary>
+        /// Maximum rows returned by a single SE query for this table.
+        /// </summary>
+        public long MaxEstimatedRows => _tableInfo.MaxEstimatedRows;
+        
+        /// <summary>
+        /// Formatted string for total estimated rows (e.g., "1.2M", "500K").
+        /// </summary>
+        public string TotalRowsFormatted => FormatRowCount(TotalEstimatedRows);
+        
+        /// <summary>
+        /// Whether this table has row count data to display.
+        /// </summary>
+        public bool HasRowCountData => TotalEstimatedRows > 0;
+        
+        /// <summary>
+        /// Whether this table has a high row count (100k+) which may indicate performance concerns.
+        /// </summary>
+        public bool HasHighRowCount => MaxEstimatedRows >= 100000;
+        
+        /// <summary>
+        /// Total duration (ms) of all SE queries for this table.
+        /// </summary>
+        public long TotalDurationMs => _tableInfo.TotalDurationMs;
+        
+        /// <summary>
+        /// Maximum duration (ms) of a single SE query for this table.
+        /// </summary>
+        public long MaxDurationMs => _tableInfo.MaxDurationMs;
+        
+        /// <summary>
+        /// Formatted string for total duration.
+        /// </summary>
+        public string TotalDurationFormatted => FormatDuration(TotalDurationMs);
+        
+        /// <summary>
+        /// Whether this table has duration data.
+        /// </summary>
+        public bool HasDurationData => TotalDurationMs > 0;
+        
+        /// <summary>
+        /// Whether this table has high duration (>100ms total).
+        /// </summary>
+        public bool HasHighDuration => TotalDurationMs >= 100;
+        
+        private bool _isCollapsed;
+        /// <summary>
+        /// Whether this table's columns are collapsed (header only).
+        /// </summary>
+        public bool IsCollapsed
+        {
+            get => _isCollapsed;
+            set
+            {
+                _isCollapsed = value;
+                NotifyOfPropertyChange();
+                NotifyOfPropertyChange(nameof(IsExpanded));
+            }
+        }
+        
+        /// <summary>
+        /// Inverse of IsCollapsed for binding.
+        /// </summary>
+        public bool IsExpanded => !_isCollapsed;
+        
+        /// <summary>
+        /// Toggles the collapsed state.
+        /// </summary>
+        public void ToggleCollapse()
+        {
+            IsCollapsed = !IsCollapsed;
+        }
+        
+        /// <summary>
+        /// Formats a row count with K/M/B suffixes for compact display.
+        /// </summary>
+        private static string FormatRowCount(long rows)
+        {
+            if (rows >= 1_000_000_000)
+                return $"{rows / 1_000_000_000.0:0.#}B";
+            if (rows >= 1_000_000)
+                return $"{rows / 1_000_000.0:0.#}M";
+            if (rows >= 1_000)
+                return $"{rows / 1_000.0:0.#}K";
+            return rows.ToString();
+        }
+        
+        /// <summary>
+        /// Formats duration in ms with appropriate suffix.
+        /// </summary>
+        private static string FormatDuration(long ms)
+        {
+            if (ms >= 60000)
+                return $"{ms / 60000.0:0.#}m";
+            if (ms >= 1000)
+                return $"{ms / 1000.0:0.#}s";
+            return $"{ms}ms";
+        }
 
         public BindableCollection<ErdColumnViewModel> Columns { get; }
+
+        #region Search Highlighting
+        
+        private bool _isSearchMatch = true;
+        /// <summary>
+        /// Whether this table matches the current search query.
+        /// </summary>
+        public bool IsSearchMatch
+        {
+            get => _isSearchMatch;
+            set { _isSearchMatch = value; NotifyOfPropertyChange(); }
+        }
+        
+        private bool _isSearchDimmed;
+        /// <summary>
+        /// Whether this table should be dimmed (doesn't match search).
+        /// </summary>
+        public bool IsSearchDimmed
+        {
+            get => _isSearchDimmed;
+            set { _isSearchDimmed = value; NotifyOfPropertyChange(); }
+        }
+        
+        #endregion
 
         #region Heat Map
 
@@ -816,6 +1339,16 @@ namespace DaxStudio.UI.ViewModels
                 if (IsSelectColumn) tips.Add("✓ Selected");
                 return tips.Count > 0 ? string.Join("\n", tips) : "No usage detected";
             }
+        }
+        
+        private bool _isSearchMatch = true;
+        /// <summary>
+        /// Whether this column matches the current search query.
+        /// </summary>
+        public bool IsSearchMatch
+        {
+            get => _isSearchMatch;
+            set { _isSearchMatch = value; NotifyOfPropertyChange(); }
         }
     }
 
