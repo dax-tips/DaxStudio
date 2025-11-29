@@ -1345,59 +1345,146 @@ namespace DaxStudio.UI.ViewModels
         public void SelectColumn(ErdTableViewModel table, ErdColumnViewModel column)
         {
             var sb = new System.Text.StringBuilder();
-            sb.AppendLine($"📊 Column: {table.TableName}[{column.ColumnName}]");
+            sb.AppendLine($"═══════════════════════════════════════════");
+            sb.AppendLine($"📊 COLUMN: {table.TableName}[{column.ColumnName}]");
+            sb.AppendLine($"═══════════════════════════════════════════");
             sb.AppendLine();
+            
+            // Usage summary line
+            var usages = new List<string>();
+            if (column.IsJoinColumn) usages.Add("🔑 Join");
+            if (column.IsFilterColumn) usages.Add("🔍 Filter");
+            if (column.IsAggregateColumn) usages.Add("📈 Aggregate");
+            if (column.IsSelectColumn) usages.Add("✓ Select");
+            if (column.HasCallback) usages.Add("⚡ Callback");
+            
+            sb.AppendLine($"Usage: {(usages.Any() ? string.Join(" | ", usages) : "None detected")}");
             sb.AppendLine($"Hit Count: {column.HitCount}");
             sb.AppendLine();
-            sb.AppendLine("Usage:");
-            if (column.IsJoinColumn) sb.AppendLine("  🔑 Join Key");
+            
+            // Join Key details
+            if (column.IsJoinColumn)
+            {
+                sb.AppendLine("───────────────────────────────────────────");
+                sb.AppendLine("🔑 JOIN KEY DETAILS");
+                sb.AppendLine("───────────────────────────────────────────");
+                
+                // Find relationships using this column
+                var columnRelationships = Relationships.Where(r =>
+                    (r.FromTable == table.TableName && r.FromColumn == column.ColumnName) ||
+                    (r.ToTable == table.TableName && r.ToColumn == column.ColumnName)).ToList();
+                
+                if (columnRelationships.Any())
+                {
+                    sb.AppendLine($"Participates in {columnRelationships.Count} relationship(s):");
+                    foreach (var rel in columnRelationships)
+                    {
+                        var isFrom = rel.FromTable == table.TableName;
+                        var otherTable = isFrom ? rel.ToTable : rel.FromTable;
+                        var otherColumn = isFrom ? rel.ToColumn : rel.FromColumn;
+                        var direction = isFrom ? "→" : "←";
+                        sb.AppendLine($"  {direction} {otherTable}[{otherColumn}]");
+                        sb.AppendLine($"      Type: {rel.JoinTypeText}, Cardinality: {rel.CardinalityText}");
+                    }
+                }
+                sb.AppendLine();
+            }
+            
+            // Filter details
             if (column.IsFilterColumn)
             {
-                sb.AppendLine("  🔍 Filter");
-                // Show filter values if available
+                sb.AppendLine("───────────────────────────────────────────");
+                sb.AppendLine("🔍 FILTER DETAILS");
+                sb.AppendLine("───────────────────────────────────────────");
+                
                 if (column.HasFilterValues)
                 {
-                    sb.AppendLine();
-                    sb.AppendLine("Filter Values:");
                     var ops = column.FilterOperators.Any() 
-                        ? string.Join("/", column.FilterOperators) 
-                        : "";
-                    if (!string.IsNullOrEmpty(ops))
-                    {
-                        sb.AppendLine($"  Operators: {ops}");
-                    }
+                        ? string.Join(", ", column.FilterOperators) 
+                        : "=";
+                    sb.AppendLine($"Operators Used: {ops}");
+                    sb.AppendLine($"Distinct Values: {column.FilterValues.Count}");
+                    sb.AppendLine();
                     
-                    // Show values (limit display to first 15)
-                    var values = column.FilterValues.Take(15).ToList();
+                    // Show values (limit display to first 20)
+                    sb.AppendLine("Filter Values:");
+                    var values = column.FilterValues.Take(20).ToList();
                     foreach (var value in values)
                     {
                         sb.AppendLine($"  • {value}");
                     }
-                    if (column.FilterValues.Count > 15)
+                    if (column.FilterValues.Count > 20)
                     {
-                        sb.AppendLine($"  ... and {column.FilterValues.Count - 15} more values");
+                        sb.AppendLine($"  ... and {column.FilterValues.Count - 20} more values");
+                    }
+                    
+                    // Analysis insight
+                    if (column.FilterValues.Count > 100)
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("💡 TIP: Large number of filter values detected.");
+                        sb.AppendLine("   Consider using a dimension table for better performance.");
                     }
                 }
+                else
+                {
+                    sb.AppendLine("Filter applied but values not captured.");
+                }
+                sb.AppendLine();
             }
-            if (column.IsAggregateColumn) sb.AppendLine($"  📈 Aggregate ({column.AggregationText})");
-            if (column.IsSelectColumn) sb.AppendLine("  ✓ Selected/Output");
             
-            // Add table-level row count context
+            // Aggregate details
+            if (column.IsAggregateColumn)
+            {
+                sb.AppendLine("───────────────────────────────────────────");
+                sb.AppendLine("📈 AGGREGATION DETAILS");
+                sb.AppendLine("───────────────────────────────────────────");
+                sb.AppendLine($"Functions: {column.AggregationText}");
+                sb.AppendLine();
+            }
+            
+            // Callback warning
+            if (column.HasCallback)
+            {
+                sb.AppendLine("───────────────────────────────────────────");
+                sb.AppendLine("⚡ CALLBACK WARNING");
+                sb.AppendLine("───────────────────────────────────────────");
+                sb.AppendLine($"Callback Type: {column.CallbackType}");
+                sb.AppendLine();
+                sb.AppendLine("⚠ DAX callbacks force row-by-row evaluation");
+                sb.AppendLine("  and prevent Storage Engine optimization.");
+                sb.AppendLine();
+                sb.AppendLine("Common causes:");
+                sb.AppendLine("  • Calculated columns referencing other tables");
+                sb.AppendLine("  • Complex DAX in calculated columns");
+                sb.AppendLine("  • Security filters with dynamic expressions");
+                sb.AppendLine();
+                sb.AppendLine("💡 TIP: Consider replacing calculated columns");
+                sb.AppendLine("   with measures or Power Query transformations.");
+                sb.AppendLine();
+            }
+            
+            // Parent table context
+            sb.AppendLine("───────────────────────────────────────────");
+            sb.AppendLine("📋 TABLE CONTEXT");
+            sb.AppendLine("───────────────────────────────────────────");
+            sb.AppendLine($"Table: {table.TableName}");
+            sb.AppendLine($"Table Hits: {table.HitCount} | Columns: {table.Columns.Count}");
             if (table.HasRowCountData)
             {
-                sb.AppendLine();
-                sb.AppendLine($"Table Rows Scanned: {table.TotalRowsFormatted}");
-                if (table.HasHighRowCount)
-                {
-                    sb.AppendLine($"⚠ Max single scan: {table.MaxEstimatedRows:N0} rows");
-                }
+                sb.AppendLine($"Rows Scanned: {table.TotalRowsFormatted}");
             }
-            
-            // Add table cache info if available
+            if (table.HasDurationData)
+            {
+                sb.AppendLine($"Total Duration: {table.TotalDurationFormatted}");
+            }
+            if (table.IsCpuHotspot)
+            {
+                sb.AppendLine($"⚡ CPU Hotspot: {table.CpuPercentageFormatted} of total CPU");
+            }
             if (table.HasCacheData)
             {
-                sb.AppendLine();
-                sb.AppendLine($"Table Cache Rate: {table.CacheHitRateFormatted}");
+                sb.AppendLine($"Cache Hit Rate: {table.CacheHitRateFormatted}");
             }
             
             SelectedDetailInfo = sb.ToString();
@@ -1409,144 +1496,199 @@ namespace DaxStudio.UI.ViewModels
         public void SelectTableDetails(ErdTableViewModel table)
         {
             var sb = new System.Text.StringBuilder();
-            sb.AppendLine($"📊 Table: {table.TableName}");
+            sb.AppendLine($"═══════════════════════════════════════════");
+            sb.AppendLine($"📊 TABLE: {table.TableName}");
+            sb.AppendLine($"═══════════════════════════════════════════");
+            sb.AppendLine();
+            
+            // Quick summary line
+            var flags = new List<string>();
+            if (table.IsFromTable) flags.Add("FROM");
+            if (table.IsJoinedTable) flags.Add("JOIN");
+            if (table.HasCallbacks) flags.Add("⚡Callbacks");
+            if (table.IsCpuHotspot) flags.Add("🔥CPU Hot");
+            if (table.HasHighRowCount) flags.Add("⚠High Rows");
+            if (flags.Any()) sb.AppendLine($"Flags: {string.Join(" | ", flags)}");
             sb.AppendLine();
             
             // Basic stats
-            sb.AppendLine("Overview:");
-            sb.AppendLine($"  SE Query Hits: {table.HitCount}");
-            sb.AppendLine($"  SE Queries: {table.QueryCount}");
-            sb.AppendLine($"  Columns Used: {table.Columns.Count}");
+            sb.AppendLine("───────────────────────────────────────────");
+            sb.AppendLine("📈 STATISTICS");
+            sb.AppendLine("───────────────────────────────────────────");
+            sb.AppendLine($"SE Query Hits: {table.HitCount}");
+            sb.AppendLine($"Distinct SE Queries: {table.QueryCount}");
+            sb.AppendLine($"Columns Accessed: {table.Columns.Count}");
             
             // Query IDs
             if (table.HasQueryIds)
             {
-                sb.AppendLine($"  Query IDs: {table.QueryIdsFormatted}");
+                sb.AppendLine($"Query IDs: {table.QueryIdsFormatted}");
             }
+            sb.AppendLine();
+            
+            // Performance metrics
+            sb.AppendLine("───────────────────────────────────────────");
+            sb.AppendLine("⏱ PERFORMANCE");
+            sb.AppendLine("───────────────────────────────────────────");
             
             // Row statistics
             if (table.HasRowCountData)
             {
-                sb.AppendLine();
-                sb.AppendLine("Row Statistics:");
-                sb.AppendLine($"  Total Rows Scanned: {table.TotalEstimatedRows:N0}");
-                sb.AppendLine($"  Max Single Scan: {table.MaxEstimatedRows:N0}");
-                
-                if (table.HasHighRowCount)
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("⚠ High row count detected (100K+ in single scan)");
-                    sb.AppendLine("  Consider adding filters or optimizing the query");
-                }
+                sb.AppendLine($"Rows Scanned: {table.TotalEstimatedRows:N0} total");
+                sb.AppendLine($"Max Single Scan: {table.MaxEstimatedRows:N0} rows");
             }
             
             // Duration
             if (table.HasDurationData)
             {
-                sb.AppendLine();
-                sb.AppendLine("Duration:");
-                sb.AppendLine($"  Total: {table.TotalDurationFormatted}");
-                sb.AppendLine($"  Max Single: {table.MaxDurationMs}ms");
-                
-                if (table.HasHighDuration)
-                {
-                    sb.AppendLine("  ⚠ High duration - potential bottleneck");
-                }
+                sb.AppendLine($"Duration: {table.TotalDurationFormatted} total");
+                sb.AppendLine($"Max Single Query: {table.MaxDurationMs}ms");
             }
             
-            // Cache
-            if (table.HasCacheData)
+            // CPU
+            if (table.TotalCpuTimeMs > 0)
             {
-                sb.AppendLine();
-                sb.AppendLine("Cache Statistics:");
-                sb.AppendLine($"  Hits: {table.CacheHits}");
-                sb.AppendLine($"  Misses: {table.CacheMisses}");
-                sb.AppendLine($"  Hit Rate: {table.CacheHitRateFormatted}");
-                
-                if (table.HasPoorCacheRate)
-                {
-                    sb.AppendLine("  ⚠ Poor cache hit rate");
-                }
+                sb.AppendLine($"CPU Time: {table.TotalCpuTimeMs:N0}ms ({table.CpuPercentageFormatted} of total)");
             }
             
             // Parallelism
             if (table.HasParallelData)
             {
+                sb.AppendLine($"Parallelism: {table.ParallelQueryCount} queries, {table.MaxCpuFactor:0.0}x max factor");
+            }
+            sb.AppendLine();
+            
+            // Cache statistics
+            if (table.HasCacheData)
+            {
+                sb.AppendLine("───────────────────────────────────────────");
+                sb.AppendLine("💾 CACHE");
+                sb.AppendLine("───────────────────────────────────────────");
+                sb.AppendLine($"Hit Rate: {table.CacheHitRateFormatted}");
+                sb.AppendLine($"Hits: {table.CacheHits} | Misses: {table.CacheMisses}");
                 sb.AppendLine();
-                sb.AppendLine("Parallelism:");
-                sb.AppendLine($"  Parallel Queries: {table.ParallelQueryCount}");
-                sb.AppendLine($"  Max CPU Factor: {table.MaxCpuFactor:0.0}x");
-                sb.AppendLine($"  Total CPU Time: {table.TotalCpuTimeMs}ms");
+            }
+            
+            // Warnings & Recommendations
+            var hasWarnings = table.IsCpuHotspot || table.HasHighRowCount || table.HasPoorCacheRate || table.HasCallbacks || table.HasHighDuration;
+            if (hasWarnings)
+            {
+                sb.AppendLine("───────────────────────────────────────────");
+                sb.AppendLine("⚠ WARNINGS & RECOMMENDATIONS");
+                sb.AppendLine("───────────────────────────────────────────");
                 
-                if (table.HasHighParallelism)
+                if (table.IsCpuHotspot)
                 {
-                    sb.AppendLine("  ℹ High parallelism detected");
+                    sb.AppendLine();
+                    sb.AppendLine($"🔥 CPU HOTSPOT ({table.CpuPercentageFormatted})");
+                    sb.AppendLine("   This table dominates CPU consumption.");
+                    sb.AppendLine("   → Review DAX measures accessing this table");
+                    sb.AppendLine("   → Consider pre-aggregating in Power Query");
+                    sb.AppendLine("   → Check for unnecessary calculated columns");
                 }
+                
+                if (table.HasHighRowCount)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("⚠ HIGH ROW COUNT (100K+ per scan)");
+                    sb.AppendLine("   Large scans impact query performance.");
+                    sb.AppendLine("   → Add filters to reduce scan size");
+                    sb.AppendLine("   → Review report filters and slicers");
+                    sb.AppendLine("   → Consider summarizing data upstream");
+                }
+                
+                if (table.HasPoorCacheRate)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("⚠ POOR CACHE HIT RATE");
+                    sb.AppendLine("   Many queries miss the SE cache.");
+                    sb.AppendLine("   → Check for non-deterministic DAX");
+                    sb.AppendLine("   → Review calculated column complexity");
+                    sb.AppendLine("   → Consider query folding opportunities");
+                }
+                
+                if (table.HasHighDuration)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("⚠ HIGH DURATION");
+                    sb.AppendLine("   This table takes significant time to scan.");
+                    sb.AppendLine("   → Review column cardinality");
+                    sb.AppendLine("   → Check dictionary encoding efficiency");
+                    sb.AppendLine("   → Consider partitioning strategies");
+                }
+                
+                if (table.HasCallbacks)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine($"⚡ CALLBACKS DETECTED ({table.CallbackColumnCount} column(s))");
+                    sb.AppendLine("   Callbacks prevent SE optimization.");
+                    var callbackCols = table.Columns.Where(c => c.HasCallback).Take(5);
+                    foreach (var col in callbackCols)
+                    {
+                        sb.AppendLine($"   • {col.ColumnName}");
+                    }
+                    sb.AppendLine("   → Replace calculated columns with measures");
+                    sb.AppendLine("   → Move calculations to Power Query");
+                }
+                sb.AppendLine();
             }
             
-            // CPU Hotspot warning
-            if (table.IsCpuHotspot)
+            // Column breakdown
+            sb.AppendLine("───────────────────────────────────────────");
+            sb.AppendLine("📋 COLUMNS ACCESSED");
+            sb.AppendLine("───────────────────────────────────────────");
+            
+            var joinCols = table.Columns.Where(c => c.IsJoinColumn).ToList();
+            var filterCols = table.Columns.Where(c => c.IsFilterColumn).ToList();
+            var aggCols = table.Columns.Where(c => c.IsAggregateColumn).ToList();
+            var selectCols = table.Columns.Where(c => c.IsSelectColumn).ToList();
+            
+            sb.AppendLine($"🔑 Join Keys: {joinCols.Count}");
+            if (joinCols.Any())
             {
-                sb.AppendLine();
-                sb.AppendLine($"⚡ CPU HOTSPOT: {table.CpuPercentageFormatted} of total CPU");
-                sb.AppendLine($"  This table consumes {table.TotalCpuTimeMs:N0}ms of total CPU time");
-                sb.AppendLine("  Consider optimizing queries that access this table");
-            }
-            else if (table.HasSignificantCpu)
-            {
-                sb.AppendLine();
-                sb.AppendLine($"CPU Usage: {table.CpuPercentageFormatted} ({table.TotalCpuTimeMs:N0}ms)");
+                foreach (var col in joinCols.Take(3))
+                    sb.AppendLine($"   • {col.ColumnName}");
+                if (joinCols.Count > 3) sb.AppendLine($"   ... +{joinCols.Count - 3} more");
             }
             
-            // Callbacks warning
-            if (table.HasCallbacks)
+            sb.AppendLine($"🔍 Filtered: {filterCols.Count}");
+            if (filterCols.Any())
             {
-                sb.AppendLine();
-                sb.AppendLine($"⚠ Callbacks Detected: {table.CallbackColumnCount} column(s)");
-                sb.AppendLine("  DAX callbacks reduce SE efficiency");
-                var callbackCols = table.Columns.Where(c => c.HasCallback).Take(3);
-                foreach (var col in callbackCols)
+                foreach (var col in filterCols.Take(3))
                 {
-                    sb.AppendLine($"  • [{col.ColumnName}]");
+                    var valCount = col.HasFilterValues ? $" ({col.FilterValues.Count} values)" : "";
+                    sb.AppendLine($"   • {col.ColumnName}{valCount}");
                 }
+                if (filterCols.Count > 3) sb.AppendLine($"   ... +{filterCols.Count - 3} more");
             }
             
-            // List columns with filters
-            var filterColumns = table.Columns.Where(c => c.IsFilterColumn && c.HasFilterValues).ToList();
-            if (filterColumns.Any())
+            sb.AppendLine($"📈 Aggregated: {aggCols.Count}");
+            if (aggCols.Any())
             {
-                sb.AppendLine();
-                sb.AppendLine("Filtered Columns:");
-                foreach (var col in filterColumns.Take(5))
-                {
-                    var preview = col.FilterValues.Take(3);
-                    var previewText = string.Join(", ", preview);
-                    if (col.FilterValues.Count > 3)
-                        previewText += "...";
-                    sb.AppendLine($"  • [{col.ColumnName}]: {previewText}");
-                }
-                if (filterColumns.Count > 5)
-                {
-                    sb.AppendLine($"  ... and {filterColumns.Count - 5} more filtered columns");
-                }
+                foreach (var col in aggCols.Take(3))
+                    sb.AppendLine($"   • {col.ColumnName} ({col.AggregationText})");
+                if (aggCols.Count > 3) sb.AppendLine($"   ... +{aggCols.Count - 3} more");
             }
             
-            // List relationships this table participates in
+            sb.AppendLine($"✓ Selected: {selectCols.Count}");
+            sb.AppendLine();
+            
+            // Relationships
             var tableRelationships = Relationships.Where(r => 
                 r.FromTable == table.TableName || r.ToTable == table.TableName).ToList();
             if (tableRelationships.Any())
             {
-                sb.AppendLine();
-                sb.AppendLine("Relationships:");
-                foreach (var rel in tableRelationships.Take(5))
+                sb.AppendLine("───────────────────────────────────────────");
+                sb.AppendLine("🔗 RELATIONSHIPS");
+                sb.AppendLine("───────────────────────────────────────────");
+                foreach (var rel in tableRelationships)
                 {
-                    var direction = rel.FromTable == table.TableName ? "→" : "←";
-                    var otherTable = rel.FromTable == table.TableName ? rel.ToTable : rel.FromTable;
-                    sb.AppendLine($"  {direction} {otherTable} ({rel.JoinTypeText})");
-                }
-                if (tableRelationships.Count > 5)
-                {
-                    sb.AppendLine($"  ... and {tableRelationships.Count - 5} more relationships");
+                    var isFrom = rel.FromTable == table.TableName;
+                    var direction = isFrom ? "→" : "←";
+                    var otherTable = isFrom ? rel.ToTable : rel.FromTable;
+                    var col = isFrom ? rel.FromColumn : rel.ToColumn;
+                    sb.AppendLine($"{direction} {otherTable}");
+                    sb.AppendLine($"   via [{col}], {rel.JoinTypeText}, {rel.CardinalityText}");
                 }
             }
             
@@ -1559,52 +1701,93 @@ namespace DaxStudio.UI.ViewModels
         public void SelectRelationship(ErdRelationshipViewModel relationship)
         {
             var sb = new System.Text.StringBuilder();
-            sb.AppendLine($"🔗 Relationship: {relationship.FromTable} → {relationship.ToTable}");
+            sb.AppendLine($"═══════════════════════════════════════════");
+            sb.AppendLine($"🔗 RELATIONSHIP");
+            sb.AppendLine($"═══════════════════════════════════════════");
             sb.AppendLine();
-            sb.AppendLine("Connection:");
-            sb.AppendLine($"  From: {relationship.FromTable}[{relationship.FromColumn}]");
-            sb.AppendLine($"  To:   {relationship.ToTable}[{relationship.ToColumn}]");
-            sb.AppendLine();
-            sb.AppendLine("Properties:");
-            sb.AppendLine($"  Join Type: {relationship.JoinTypeText}");
-            sb.AppendLine($"  Hit Count: {relationship.HitCount}");
             
-            // Cardinality info
-            if (relationship.Cardinality != XmSqlCardinality.Unknown)
+            sb.AppendLine($"{relationship.FromTable}  →  {relationship.ToTable}");
+            sb.AppendLine();
+            
+            // Connection details
+            sb.AppendLine("───────────────────────────────────────────");
+            sb.AppendLine("📋 CONNECTION");
+            sb.AppendLine("───────────────────────────────────────────");
+            sb.AppendLine($"From: {relationship.FromTable}[{relationship.FromColumn}]");
+            sb.AppendLine($"To:   {relationship.ToTable}[{relationship.ToColumn}]");
+            sb.AppendLine();
+            
+            // Properties
+            sb.AppendLine("───────────────────────────────────────────");
+            sb.AppendLine("⚙ PROPERTIES");
+            sb.AppendLine("───────────────────────────────────────────");
+            sb.AppendLine($"Join Type: {relationship.JoinTypeText}");
+            sb.AppendLine($"Cardinality: {relationship.CardinalityText}");
+            sb.AppendLine($"Cross-Filter: {(relationship.IsBidirectional ? "Bidirectional (Both)" : "Single direction")}");
+            sb.AppendLine($"Times Used: {relationship.HitCount}");
+            sb.AppendLine();
+            
+            // Warnings
+            if (relationship.IsManyToMany || relationship.IsBidirectional)
             {
-                sb.AppendLine($"  Cardinality: {relationship.CardinalityText}");
+                sb.AppendLine("───────────────────────────────────────────");
+                sb.AppendLine("⚠ CONSIDERATIONS");
+                sb.AppendLine("───────────────────────────────────────────");
+                
                 if (relationship.IsManyToMany)
                 {
                     sb.AppendLine();
-                    sb.AppendLine("⚠ Many-to-Many relationship detected");
-                    sb.AppendLine("  This can impact query performance");
+                    sb.AppendLine("⚠ MANY-TO-MANY RELATIONSHIP");
+                    sb.AppendLine("   Can significantly impact performance:");
+                    sb.AppendLine("   → Results in larger intermediate tables");
+                    sb.AppendLine("   → May cause unexpected aggregations");
+                    sb.AppendLine("   → Consider bridge tables if possible");
                 }
-            }
-            
-            // Cross-filter direction
-            if (relationship.IsBidirectional)
-            {
-                sb.AppendLine($"  Cross-Filter: Bidirectional (Both)");
+                
+                if (relationship.IsBidirectional)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("⚠ BIDIRECTIONAL CROSS-FILTER");
+                    sb.AppendLine("   Filters flow both directions:");
+                    sb.AppendLine("   → Can cause ambiguous paths");
+                    sb.AppendLine("   → May impact performance on large models");
+                    sb.AppendLine("   → Review if bidirectional is necessary");
+                }
                 sb.AppendLine();
-                sb.AppendLine("ℹ Bidirectional cross-filtering enabled");
             }
             
-            // Get stats from both tables
+            // Table comparison
             var fromTable = Tables.FirstOrDefault(t => t.TableName == relationship.FromTable);
             var toTable = Tables.FirstOrDefault(t => t.TableName == relationship.ToTable);
             
             if (fromTable != null || toTable != null)
             {
+                sb.AppendLine("───────────────────────────────────────────");
+                sb.AppendLine("📊 TABLE COMPARISON");
+                sb.AppendLine("───────────────────────────────────────────");
                 sb.AppendLine();
-                sb.AppendLine("Table Statistics:");
-                if (fromTable != null)
-                {
-                    sb.AppendLine($"  {fromTable.TableName}: {fromTable.HitCount} hits, {fromTable.TotalRowsFormatted} rows");
-                }
-                if (toTable != null)
-                {
-                    sb.AppendLine($"  {toTable.TableName}: {toTable.HitCount} hits, {toTable.TotalRowsFormatted} rows");
-                }
+                sb.AppendLine($"{"Metric",-18} {"From",-12} {"To",-12}");
+                sb.AppendLine($"{"───────",-18} {"────",-12} {"──",-12}");
+                
+                var fromHits = fromTable?.HitCount.ToString() ?? "N/A";
+                var toHits = toTable?.HitCount.ToString() ?? "N/A";
+                sb.AppendLine($"{"Hits",-18} {fromHits,-12} {toHits,-12}");
+                
+                var fromRows = fromTable?.TotalRowsFormatted ?? "N/A";
+                var toRows = toTable?.TotalRowsFormatted ?? "N/A";
+                sb.AppendLine($"{"Rows",-18} {fromRows,-12} {toRows,-12}");
+                
+                var fromDuration = fromTable?.TotalDurationFormatted ?? "N/A";
+                var toDuration = toTable?.TotalDurationFormatted ?? "N/A";
+                sb.AppendLine($"{"Duration",-18} {fromDuration,-12} {toDuration,-12}");
+                
+                var fromCpu = fromTable?.CpuPercentageFormatted ?? "N/A";
+                var toCpu = toTable?.CpuPercentageFormatted ?? "N/A";
+                sb.AppendLine($"{"CPU %",-18} {fromCpu,-12} {toCpu,-12}");
+                
+                var fromCache = fromTable?.CacheHitRateFormatted ?? "N/A";
+                var toCache = toTable?.CacheHitRateFormatted ?? "N/A";
+                sb.AppendLine($"{"Cache Rate",-18} {fromCache,-12} {toCache,-12}");
             }
             
             SelectedDetailInfo = sb.ToString();
