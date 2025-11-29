@@ -71,6 +71,31 @@ namespace DaxStudio.UI.Utils
             @"\b(?:VAND|VOR)\b",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        // ==================== FILTER VALUE EXTRACTION PATTERNS ====================
+
+        // Matches equality comparisons: 'Table'[Column] = value or 'Table'[Column] = 'string value'
+        // Handles: 'table'[col] = 'value', 'table'[col] = 123, 'table'[col] = '2025/09'
+        private static readonly Regex FilterEqualityPattern = new Regex(
+            @"'(?<table>[^']+)'\s*\[(?<column>[^\]]+)\]\s*(?<op>=|<>|!=|>=|<=|>|<)\s*(?<value>'[^']*'|""[^""]*""|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // Matches IN clause with spaces: 'Table'[Column] IN ( 'val1', 'val2', ... )
+        // Handles spacing variations like IN ( val ) or IN (val)
+        private static readonly Regex FilterInPattern = new Regex(
+            @"'(?<table>[^']+)'\s*\[(?<column>[^\]]+)\]\s+IN\s*\(\s*(?<values>[^)]+)\s*\)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // Matches BETWEEN clause: 'Table'[Column] BETWEEN value1 AND value2
+        private static readonly Regex FilterBetweenPattern = new Regex(
+            @"'(?<table>[^']+)'\s*\[(?<column>[^\]]+)\]\s+BETWEEN\s+(?<val1>'[^']*'|""[^""]*""|-?\d+(?:\.\d+)?)\s+AND\s+(?<val2>'[^']*'|""[^""]*""|-?\d+(?:\.\d+)?)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // Matches COALESCE comparisons: PFCASTCOALESCE ( 'Table'[Column] AS TYPE ) > COALESCE ( value )
+        // or COALESCE ( 'Table'[Column] ) > value
+        private static readonly Regex FilterCoalescePattern = new Regex(
+            @"(?:PFCASTCOALESCE|COALESCE)\s*\(\s*'(?<table>[^']+)'\s*\[(?<column>[^\]]+)\](?:\s+AS\s+\w+)?\s*\)\s*(?<op>=|<>|!=|>=|<=|>|<)\s*(?:COALESCE\s*\(\s*)?(?<value>'[^']*'|""[^""]*""|-?\d+(?:\.\d+)?)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         // ==================== LINEAGE TRACKING PATTERNS ====================
 
         // Matches DEFINE TABLE '$TTableX' := ... blocks
@@ -122,6 +147,17 @@ namespace DaxStudio.UI.Utils
             public HashSet<string> SourcePhysicalTables { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             public HashSet<string> SourceTempTables { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             public Dictionary<string, ColumnLineage> ColumnMappings { get; } = new Dictionary<string, ColumnLineage>(StringComparer.OrdinalIgnoreCase);
+            
+            /// <summary>
+            /// Filter values defined in the WHERE clause of this temp table's DEFINE statement.
+            /// Key: physical column in format "Table.Column", Value: list of filter values
+            /// </summary>
+            public Dictionary<string, List<string>> FilterValues { get; } = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            
+            /// <summary>
+            /// Filter operators used for each column.
+            /// </summary>
+            public Dictionary<string, string> FilterOperators { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -140,6 +176,27 @@ namespace DaxStudio.UI.Utils
         // Stores the duration for the current query being parsed
         private long? _currentQueryDurationMs;
 
+        // Stores whether current query was a cache hit
+        private bool _currentQueryIsCacheHit;
+
+        // Stores parallelism metrics for current query
+        private long? _currentQueryCpuTimeMs;
+        private double? _currentQueryCpuFactor;
+        private long? _currentQueryNetParallelDurationMs;
+
+        /// <summary>
+        /// Extended SE event metrics for parsing.
+        /// </summary>
+        public class SeEventMetrics
+        {
+            public long? EstimatedRows { get; set; }
+            public long? DurationMs { get; set; }
+            public bool IsCacheHit { get; set; }
+            public long? CpuTimeMs { get; set; }
+            public double? CpuFactor { get; set; }
+            public long? NetParallelDurationMs { get; set; }
+        }
+
         /// <summary>
         /// Parses a single xmSQL query and adds the results to the analysis.
         /// </summary>
@@ -150,14 +207,38 @@ namespace DaxStudio.UI.Utils
         /// <returns>True if parsing was successful, false otherwise.</returns>
         public bool ParseQuery(string xmSql, XmSqlAnalysis analysis, long? estimatedRows = null, long? durationMs = null)
         {
+            return ParseQueryWithMetrics(xmSql, analysis, new SeEventMetrics
+            {
+                EstimatedRows = estimatedRows,
+                DurationMs = durationMs,
+                IsCacheHit = false,
+                CpuTimeMs = null,
+                CpuFactor = null,
+                NetParallelDurationMs = null
+            });
+        }
+
+        /// <summary>
+        /// Parses a single xmSQL query with full SE event metrics.
+        /// </summary>
+        /// <param name="xmSql">The xmSQL query text to parse.</param>
+        /// <param name="analysis">The analysis object to add results to.</param>
+        /// <param name="metrics">SE event metrics including cache hit, parallelism data.</param>
+        /// <returns>True if parsing was successful, false otherwise.</returns>
+        public bool ParseQueryWithMetrics(string xmSql, XmSqlAnalysis analysis, SeEventMetrics metrics)
+        {
             if (string.IsNullOrWhiteSpace(xmSql))
                 return false;
 
             try
             {
                 analysis.TotalSEQueriesAnalyzed++;
-                _currentQueryEstimatedRows = estimatedRows;
-                _currentQueryDurationMs = durationMs;
+                _currentQueryEstimatedRows = metrics?.EstimatedRows;
+                _currentQueryDurationMs = metrics?.DurationMs;
+                _currentQueryIsCacheHit = metrics?.IsCacheHit ?? false;
+                _currentQueryCpuTimeMs = metrics?.CpuTimeMs;
+                _currentQueryCpuFactor = metrics?.CpuFactor;
+                _currentQueryNetParallelDurationMs = metrics?.NetParallelDurationMs;
 
                 // Initialize lineage tracking for this query
                 _tempTableLineage = new Dictionary<string, TempTableLineage>(StringComparer.OrdinalIgnoreCase);
@@ -221,6 +302,19 @@ namespace DaxStudio.UI.Utils
                     table.IsFromTable = true;
                     table.HitCount++;
                     
+                    // Track query count (distinct queries hitting this table)
+                    table.QueryCount++;
+                    
+                    // Track cache hits/misses
+                    if (_currentQueryIsCacheHit)
+                    {
+                        table.CacheHits++;
+                    }
+                    else
+                    {
+                        table.CacheMisses++;
+                    }
+                    
                     // Track estimated rows for this table
                     if (_currentQueryEstimatedRows.HasValue && _currentQueryEstimatedRows.Value > 0)
                     {
@@ -238,6 +332,27 @@ namespace DaxStudio.UI.Utils
                         if (_currentQueryDurationMs.Value > table.MaxDurationMs)
                         {
                             table.MaxDurationMs = _currentQueryDurationMs.Value;
+                        }
+                    }
+                    
+                    // Track parallelism metrics
+                    if (_currentQueryCpuTimeMs.HasValue && _currentQueryCpuTimeMs.Value > 0)
+                    {
+                        table.TotalCpuTimeMs += _currentQueryCpuTimeMs.Value;
+                    }
+                    
+                    if (_currentQueryNetParallelDurationMs.HasValue && _currentQueryNetParallelDurationMs.Value > 0)
+                    {
+                        table.TotalParallelDurationMs += _currentQueryNetParallelDurationMs.Value;
+                    }
+                    
+                    if (_currentQueryCpuFactor.HasValue && _currentQueryCpuFactor.Value > 1.0)
+                    {
+                        // This query ran in parallel (CpuFactor > 1)
+                        table.ParallelQueryCount++;
+                        if (_currentQueryCpuFactor.Value > table.MaxCpuFactor)
+                        {
+                            table.MaxCpuFactor = _currentQueryCpuFactor.Value;
                         }
                     }
                 }
@@ -412,7 +527,7 @@ namespace DaxStudio.UI.Utils
         }
 
         /// <summary>
-        /// Parses the WHERE clause to identify filtered columns.
+        /// Parses the WHERE clause to identify filtered columns and extract filter values.
         /// Resolves temp table column references to physical tables.
         /// </summary>
         private void ParseWhereClause(string xmSql, XmSqlAnalysis analysis)
@@ -423,7 +538,19 @@ namespace DaxStudio.UI.Utils
                 // Get everything after WHERE
                 var whereClause = xmSql.Substring(whereMatch.Index);
 
-                // Find all table[column] references in the WHERE clause
+                // Extract filter values from equality comparisons
+                ExtractFilterEqualityValues(whereClause, analysis);
+
+                // Extract filter values from IN clauses
+                ExtractFilterInValues(whereClause, analysis);
+
+                // Extract filter values from BETWEEN clauses
+                ExtractFilterBetweenValues(whereClause, analysis);
+
+                // Extract filter values from COALESCE comparisons
+                ExtractFilterCoalesceValues(whereClause, analysis);
+
+                // Find all table[column] references in the WHERE clause (for columns without explicit values)
                 var columnMatches = TableColumnPattern.Matches(whereClause);
                 foreach (Match match in columnMatches)
                 {
@@ -448,6 +575,182 @@ namespace DaxStudio.UI.Utils
                     {
                         var column = table.GetOrAddColumn(columnName);
                         column?.AddUsage(XmSqlColumnUsage.Filter);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Extracts filter values from equality comparisons like 'Table'[Column] = value.
+        /// </summary>
+        private void ExtractFilterEqualityValues(string whereClause, XmSqlAnalysis analysis)
+        {
+            var matches = FilterEqualityPattern.Matches(whereClause);
+            foreach (Match match in matches)
+            {
+                var tableName = match.Groups["table"].Value;
+                var columnName = match.Groups["column"].Value;
+                var op = match.Groups["op"].Value;
+                var value = match.Groups["value"].Value.Trim('\'', '"');
+
+                // Resolve temp table references
+                var resolved = ResolveToPhysicalColumn(tableName, columnName);
+                if (resolved.HasValue && !IsTempTable(resolved.Value.Table))
+                {
+                    tableName = resolved.Value.Table;
+                    columnName = resolved.Value.Column;
+                }
+                else if (IsTempTable(tableName))
+                {
+                    continue;
+                }
+
+                var table = analysis.GetOrAddTable(tableName);
+                if (table != null)
+                {
+                    var column = table.GetOrAddColumn(columnName);
+                    if (column != null)
+                    {
+                        column.AddUsage(XmSqlColumnUsage.Filter);
+                        column.AddFilterValue(value, op);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Extracts filter values from IN clauses like 'Table'[Column] IN (val1, val2).
+        /// </summary>
+        private void ExtractFilterInValues(string whereClause, XmSqlAnalysis analysis)
+        {
+            var matches = FilterInPattern.Matches(whereClause);
+            foreach (Match match in matches)
+            {
+                var tableName = match.Groups["table"].Value;
+                var columnName = match.Groups["column"].Value;
+                var valuesText = match.Groups["values"].Value;
+
+                // Resolve temp table references
+                var resolved = ResolveToPhysicalColumn(tableName, columnName);
+                if (resolved.HasValue && !IsTempTable(resolved.Value.Table))
+                {
+                    tableName = resolved.Value.Table;
+                    columnName = resolved.Value.Column;
+                }
+                else if (IsTempTable(tableName))
+                {
+                    continue;
+                }
+
+                var table = analysis.GetOrAddTable(tableName);
+                if (table != null)
+                {
+                    var column = table.GetOrAddColumn(columnName);
+                    if (column != null)
+                    {
+                        column.AddUsage(XmSqlColumnUsage.Filter);
+                        
+                        // Parse individual values from the IN list
+                        var values = ParseInValues(valuesText);
+                        foreach (var value in values)
+                        {
+                            column.AddFilterValue(value, "IN");
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Parses values from an IN clause value list.
+        /// </summary>
+        private List<string> ParseInValues(string valuesText)
+        {
+            var result = new List<string>();
+            var parts = valuesText.Split(',');
+            foreach (var part in parts)
+            {
+                var trimmed = part.Trim().Trim('\'', '"');
+                if (!string.IsNullOrWhiteSpace(trimmed) && result.Count < 20)
+                {
+                    result.Add(trimmed);
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Extracts filter values from BETWEEN clauses.
+        /// </summary>
+        private void ExtractFilterBetweenValues(string whereClause, XmSqlAnalysis analysis)
+        {
+            var matches = FilterBetweenPattern.Matches(whereClause);
+            foreach (Match match in matches)
+            {
+                var tableName = match.Groups["table"].Value;
+                var columnName = match.Groups["column"].Value;
+                var val1 = match.Groups["val1"].Value.Trim('\'', '"');
+                var val2 = match.Groups["val2"].Value.Trim('\'', '"');
+
+                // Resolve temp table references
+                var resolved = ResolveToPhysicalColumn(tableName, columnName);
+                if (resolved.HasValue && !IsTempTable(resolved.Value.Table))
+                {
+                    tableName = resolved.Value.Table;
+                    columnName = resolved.Value.Column;
+                }
+                else if (IsTempTable(tableName))
+                {
+                    continue;
+                }
+
+                var table = analysis.GetOrAddTable(tableName);
+                if (table != null)
+                {
+                    var column = table.GetOrAddColumn(columnName);
+                    if (column != null)
+                    {
+                        column.AddUsage(XmSqlColumnUsage.Filter);
+                        column.AddFilterValue($"{val1} to {val2}", "BETWEEN");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Extracts filter values from COALESCE/PFCASTCOALESCE comparisons.
+        /// Handles: PFCASTCOALESCE ( 'Table'[Column] AS INT ) > COALESCE ( value )
+        /// </summary>
+        private void ExtractFilterCoalesceValues(string whereClause, XmSqlAnalysis analysis)
+        {
+            var matches = FilterCoalescePattern.Matches(whereClause);
+            foreach (Match match in matches)
+            {
+                var tableName = match.Groups["table"].Value;
+                var columnName = match.Groups["column"].Value;
+                var op = match.Groups["op"].Value;
+                var value = match.Groups["value"].Value.Trim('\'', '"', ')', ' ');
+
+                // Resolve temp table references
+                var resolved = ResolveToPhysicalColumn(tableName, columnName);
+                if (resolved.HasValue && !IsTempTable(resolved.Value.Table))
+                {
+                    tableName = resolved.Value.Table;
+                    columnName = resolved.Value.Column;
+                }
+                else if (IsTempTable(tableName))
+                {
+                    continue;
+                }
+
+                var table = analysis.GetOrAddTable(tableName);
+                if (table != null)
+                {
+                    var column = table.GetOrAddColumn(columnName);
+                    if (column != null)
+                    {
+                        column.AddUsage(XmSqlColumnUsage.Filter);
+                        column.AddFilterValue(value, op);
                     }
                 }
             }
@@ -683,13 +986,90 @@ namespace DaxStudio.UI.Utils
                 }
             }
 
+            // Extract filter values from WHERE clause in the definition
+            ExtractTempTableFilterValues(definition, lineage);
+
             _tempTableLineage[tempTableName] = lineage;
             
-            Log.Debug("Parsed lineage for {TempTable}: Physical=[{Physical}], Temp=[{Temp}], Columns={ColCount}",
+            Log.Debug("Parsed lineage for {TempTable}: Physical=[{Physical}], Temp=[{Temp}], Columns={ColCount}, Filters={FilterCount}",
                 tempTableName,
                 string.Join(",", lineage.SourcePhysicalTables),
                 string.Join(",", lineage.SourceTempTables),
-                lineage.ColumnMappings.Count);
+                lineage.ColumnMappings.Count,
+                lineage.FilterValues.Count);
+        }
+
+        /// <summary>
+        /// Extracts filter values from the WHERE clause of a temp table definition.
+        /// These values can later be propagated to ININDEX-filtered columns.
+        /// </summary>
+        private void ExtractTempTableFilterValues(string definition, TempTableLineage lineage)
+        {
+            // Look for WHERE clause in the definition
+            var whereMatch = WhereClausePattern.Match(definition);
+            if (!whereMatch.Success) return;
+
+            var whereClause = definition.Substring(whereMatch.Index);
+            // Limit to just the WHERE portion (stop at REDUCED BY, DEFINE, etc.)
+            var endMarkers = new[] { "REDUCED BY", "DEFINE TABLE", "CREATE SHALLOW" };
+            foreach (var marker in endMarkers)
+            {
+                var idx = whereClause.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                if (idx > 0) whereClause = whereClause.Substring(0, idx);
+            }
+
+            // Extract equality filters: 'table'[column] = 'value'
+            var eqMatches = FilterEqualityPattern.Matches(whereClause);
+            foreach (Match match in eqMatches)
+            {
+                var tableName = match.Groups["table"].Value;
+                var columnName = match.Groups["column"].Value;
+                var op = match.Groups["op"].Value;
+                var value = match.Groups["value"].Value.Trim('\'', '"');
+
+                // Skip temp table references
+                if (IsTempTable(tableName)) continue;
+
+                var key = $"{tableName}.{columnName}";
+                if (!lineage.FilterValues.ContainsKey(key))
+                {
+                    lineage.FilterValues[key] = new List<string>();
+                }
+                if (!lineage.FilterValues[key].Contains(value) && lineage.FilterValues[key].Count < 20)
+                {
+                    lineage.FilterValues[key].Add(value);
+                }
+                lineage.FilterOperators[key] = op;
+            }
+
+            // Extract IN clause filters: 'table'[column] IN ( 'val1', 'val2', ... )
+            var inMatches = FilterInPattern.Matches(whereClause);
+            foreach (Match match in inMatches)
+            {
+                var tableName = match.Groups["table"].Value;
+                var columnName = match.Groups["column"].Value;
+                var valuesText = match.Groups["values"].Value;
+
+                // Skip temp table references
+                if (IsTempTable(tableName)) continue;
+
+                var key = $"{tableName}.{columnName}";
+                if (!lineage.FilterValues.ContainsKey(key))
+                {
+                    lineage.FilterValues[key] = new List<string>();
+                }
+                lineage.FilterOperators[key] = "IN";
+
+                // Parse individual values
+                var values = ParseInValues(valuesText);
+                foreach (var value in values)
+                {
+                    if (!lineage.FilterValues[key].Contains(value) && lineage.FilterValues[key].Count < 20)
+                    {
+                        lineage.FilterValues[key].Add(value);
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -823,7 +1203,13 @@ namespace DaxStudio.UI.Utils
                 {
                     var table = analysis.GetOrAddTable(physTable);
                     var column = table?.GetOrAddColumn(physColumn);
-                    column?.AddUsage(XmSqlColumnUsage.Filter);
+                    if (column != null)
+                    {
+                        column.AddUsage(XmSqlColumnUsage.Filter);
+                        
+                        // Try to propagate filter values from the source temp table chain
+                        PropagateInIndexFilterValues(tempTable, physTable, physColumn, column);
+                    }
                 }
 
                 // Resolve the temp table to find what physical tables it relates to
@@ -841,6 +1227,63 @@ namespace DaxStudio.UI.Utils
                         // We could add an implicit relationship here if needed
                         // For now, just ensure both tables are tracked
                         analysis.GetOrAddTable(sourceTable);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Propagates filter values from temp table chains to the ININDEX-filtered column.
+        /// Traces back through $TTable references to find the original filter values.
+        /// </summary>
+        private void PropagateInIndexFilterValues(string tempTable, string targetTable, string targetColumn, XmSqlColumnInfo column)
+        {
+            // Track visited tables to avoid infinite loops
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var tablesToCheck = new Queue<string>();
+            tablesToCheck.Enqueue(tempTable);
+
+            while (tablesToCheck.Count > 0)
+            {
+                var currentTemp = tablesToCheck.Dequeue();
+                if (visited.Contains(currentTemp)) continue;
+                visited.Add(currentTemp);
+
+                if (!_tempTableLineage.TryGetValue(currentTemp, out var lineage))
+                    continue;
+
+                // Check if this temp table has filter values we can propagate
+                foreach (var kvp in lineage.FilterValues)
+                {
+                    // The key is "Table.Column" - we need to check if this relates to our target
+                    var parts = kvp.Key.Split('.');
+                    if (parts.Length != 2) continue;
+
+                    var filterTable = parts[0];
+                    var filterColumn = parts[1];
+
+                    // Check for direct match or related columns
+                    // The filter might be on the same table/column, or on a related dimension table
+                    // For now, propagate if it's from a dimension table that feeds into this ININDEX
+                    if (lineage.SourcePhysicalTables.Contains(filterTable))
+                    {
+                        foreach (var value in kvp.Value)
+                        {
+                            column.AddFilterValue(value, lineage.FilterOperators.TryGetValue(kvp.Key, out var op) ? op : "ININDEX");
+                        }
+                        
+                        Log.Debug("  Propagated filter values from {Table}[{Col}] to {Target}[{TargetCol}]: {Values}",
+                            filterTable, filterColumn, targetTable, targetColumn, 
+                            string.Join(", ", kvp.Value.Take(5)));
+                    }
+                }
+
+                // Add source temp tables to check (trace back further)
+                foreach (var sourceTempTable in lineage.SourceTempTables)
+                {
+                    if (!visited.Contains(sourceTempTable))
+                    {
+                        tablesToCheck.Enqueue(sourceTempTable);
                     }
                 }
             }

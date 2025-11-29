@@ -11,7 +11,7 @@ namespace DaxStudio.UI.Views
     /// <summary>
     /// Interaction logic for XmSqlErdView.xaml
     /// </summary>
-    public partial class XmSqlErdView : Controls.ZoomableUserControl
+    public partial class XmSqlErdView : UserControl
     {
         private bool _isDragging;
         private Point _dragStartPoint;
@@ -24,18 +24,84 @@ namespace DaxStudio.UI.Views
         {
             InitializeComponent();
             
-            // Subscribe to export requests from the ViewModel
+            // Subscribe to export requests and scale changes from the ViewModel
             DataContextChanged += (s, e) =>
             {
                 if (e.OldValue is XmSqlErdViewModel oldVm)
                 {
                     oldVm.ExportRequested -= OnExportRequested;
+                    oldVm.OnScaleChanged -= OnScaleChanged;
                 }
                 if (e.NewValue is XmSqlErdViewModel newVm)
                 {
                     newVm.ExportRequested += OnExportRequested;
+                    newVm.OnScaleChanged += OnScaleChanged;
+                    // Set initial view dimensions
+                    UpdateViewDimensions(newVm);
+                    // Apply initial scale
+                    UpdateCanvasScale(newVm.Scale);
                 }
             };
+            
+            // Update view dimensions when size changes
+            SizeChanged += (s, e) =>
+            {
+                if (DataContext is XmSqlErdViewModel vm)
+                {
+                    UpdateViewDimensions(vm);
+                }
+            };
+        }
+
+        /// <summary>
+        /// Updates the ViewModel with current view dimensions for ZoomToFit calculation.
+        /// </summary>
+        private void UpdateViewDimensions(XmSqlErdViewModel vm)
+        {
+            if (MainScrollViewer != null)
+            {
+                vm.ViewWidth = MainScrollViewer.ActualWidth > 0 ? MainScrollViewer.ActualWidth : 800;
+                vm.ViewHeight = MainScrollViewer.ActualHeight > 0 ? MainScrollViewer.ActualHeight : 600;
+            }
+        }
+
+        /// <summary>
+        /// Handles scale changes from the ViewModel to update the canvas transform.
+        /// </summary>
+        private void OnScaleChanged(object sender, System.EventArgs e)
+        {
+            if (DataContext is XmSqlErdViewModel vm)
+            {
+                UpdateCanvasScale(vm.Scale);
+            }
+        }
+
+        /// <summary>
+        /// Updates the canvas scale transform.
+        /// </summary>
+        private void UpdateCanvasScale(double scale)
+        {
+            if (CanvasScaleTransform != null)
+            {
+                CanvasScaleTransform.ScaleX = scale;
+                CanvasScaleTransform.ScaleY = scale;
+            }
+        }
+
+        /// <summary>
+        /// Handles mouse wheel for zooming when Ctrl is held (only affects canvas, not toolbar).
+        /// </summary>
+        private void ScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            if (Keyboard.Modifiers == ModifierKeys.Control)
+            {
+                if (DataContext is XmSqlErdViewModel vm)
+                {
+                    var factor = e.Delta / 1200.0;
+                    vm.Scale += factor;
+                    e.Handled = true;
+                }
+            }
         }
 
         /// <summary>
@@ -249,5 +315,58 @@ namespace DaxStudio.UI.Views
                 e.Handled = true;
             }
         }
+
+        #region Table Resize
+
+        private bool _isResizing;
+        private Point _resizeStartPoint;
+        private double _resizeStartHeight;
+        private ErdTableViewModel _resizingTable;
+        private FrameworkElement _resizingElement;
+
+        private void ResizeGrip_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is FrameworkElement element && element.DataContext is ErdTableViewModel tableVm)
+            {
+                _coordinateRoot = FindCoordinateRoot(element);
+                if (_coordinateRoot == null) return;
+
+                _isResizing = true;
+                _resizeStartPoint = e.GetPosition(_coordinateRoot);
+                _resizeStartHeight = tableVm.ColumnsHeight;
+                _resizingTable = tableVm;
+                _resizingElement = element;
+                element.CaptureMouse();
+                e.Handled = true;
+            }
+        }
+
+        private void ResizeGrip_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_isResizing && _resizingTable != null && _coordinateRoot != null)
+            {
+                var currentPosition = e.GetPosition(_coordinateRoot);
+                var deltaY = currentPosition.Y - _resizeStartPoint.Y;
+                
+                // Update the columns height
+                _resizingTable.ColumnsHeight = _resizeStartHeight + deltaY;
+                e.Handled = true;
+            }
+        }
+
+        private void ResizeGrip_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (_isResizing && sender is FrameworkElement element)
+            {
+                _isResizing = false;
+                _resizingTable = null;
+                _resizingElement = null;
+                _coordinateRoot = null;
+                element.ReleaseMouseCapture();
+                e.Handled = true;
+            }
+        }
+
+        #endregion
     }
 }

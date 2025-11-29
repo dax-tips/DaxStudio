@@ -1,4 +1,4 @@
-<ctrl:ZoomableUserControl x:Class="DaxStudio.UI.Views.XmSqlErdView"
+<UserControl x:Class="DaxStudio.UI.Views.XmSqlErdView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
@@ -32,8 +32,6 @@
             <!-- Table Card Template with Heat Map, Selection, and Drag support -->
             <DataTemplate x:Key="TableCardTemplate" DataType="{x:Type vm:ErdTableViewModel}">
                 <Border x:Name="TableBorder"
-                        BorderThickness="1"
-                        BorderBrush="#CCCCCC"
                         CornerRadius="4"
                         Width="{Binding Width}"
                         MinHeight="80"
@@ -45,9 +43,15 @@
                     <Border.Style>
                         <Style TargetType="Border">
                             <Setter Property="Opacity" Value="1"/>
+                            <Setter Property="BorderThickness" Value="1"/>
+                            <Setter Property="BorderBrush" Value="#CCCCCC"/>
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsSearchMatch}" Value="False">
                                     <Setter Property="Opacity" Value="0.35"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsBottleneck}" Value="True">
+                                    <Setter Property="BorderThickness" Value="3"/>
+                                    <Setter Property="BorderBrush" Value="#FF5722"/>
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
@@ -60,7 +64,9 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         
                         <!-- Table Header with Heat Map Color -->
@@ -130,6 +136,26 @@
                                                FontSize="10"
                                                FontWeight="SemiBold"
                                                Foreground="#333"/>
+                                </Border>
+                                
+                                <!-- Bottleneck Rank Badge (only shown when IsBottleneck is true) -->
+                                <Border Grid.Column="3"
+                                        Background="#FF5722"
+                                        CornerRadius="10"
+                                        Padding="6,2"
+                                        Margin="4,0,0,0"
+                                        VerticalAlignment="Center"
+                                        Visibility="{Binding IsBottleneck, Converter={StaticResource BoolToCollapsedConverter}}"
+                                        ToolTip="Performance bottleneck rank (1 = slowest)">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="🔥" FontSize="10" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding BottleneckRank}"
+                                                   FontSize="10"
+                                                   FontWeight="Bold"
+                                                   Foreground="White"
+                                                   Margin="2,0,0,0"
+                                                   VerticalAlignment="Center"/>
+                                    </StackPanel>
                                 </Border>
                             </Grid>
                         </Border>
@@ -236,10 +262,156 @@
                             </StackPanel>
                         </Border>
                         
+                        <!-- SE Event Data Row (Cache, Queries, Parallelism) -->
+                        <Border Grid.Row="3"
+                                Padding="8,2"
+                                Background="{DynamicResource Theme.Brush.MenuBar.Back}">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding HasCacheData}" Value="True"/>
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </MultiDataTrigger>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding HasParallelData}" Value="True"/>
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <StackPanel Orientation="Horizontal">
+                                <!-- Cache Hit Indicator -->
+                                <StackPanel Orientation="Horizontal" 
+                                            Visibility="{Binding HasCacheData, Converter={StaticResource BoolToCollapsedConverter}}"
+                                            ToolTip="{Binding CacheTooltip}">
+                                    <TextBlock Text="Cache: " FontSize="9" 
+                                               Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding CacheHitRateFormatted}" 
+                                               FontSize="9" FontWeight="SemiBold"
+                                               VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{DynamicResource Theme.Brush.Default.Fore}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding HasGoodCacheRate}" Value="True">
+                                                        <Setter Property="Foreground" Value="#2E7D32"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding HasPoorCacheRate}" Value="True">
+                                                        <Setter Property="Foreground" Value="#C62828"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <!-- Cache indicator icon -->
+                                    <TextBlock FontSize="9" VerticalAlignment="Center" Margin="2,0,0,0">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value=""/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding HasGoodCacheRate}" Value="True">
+                                                        <Setter Property="Text" Value=" ✓"/>
+                                                        <Setter Property="Foreground" Value="#2E7D32"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding HasPoorCacheRate}" Value="True">
+                                                        <Setter Property="Text" Value=" ✗"/>
+                                                        <Setter Property="Foreground" Value="#C62828"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                                
+                                <!-- Separator -->
+                                <TextBlock Text="  |  " FontSize="9" 
+                                           Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                                           VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding HasCacheData}" Value="True"/>
+                                                        <Condition Binding="{Binding HasParallelData}" Value="True"/>
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </MultiDataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                
+                                <!-- Parallelism Indicator -->
+                                <StackPanel Orientation="Horizontal" 
+                                            Visibility="{Binding HasParallelData, Converter={StaticResource BoolToCollapsedConverter}}"
+                                            ToolTip="{Binding ParallelismTooltip}">
+                                    <TextBlock Text="⚡" FontSize="9" 
+                                               Foreground="#1565C0"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding CpuFactorFormatted}" 
+                                               FontSize="9" FontWeight="SemiBold"
+                                               Margin="2,0,0,0"
+                                               VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="#1565C0"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding HasHighParallelism}" Value="True">
+                                                        <Setter Property="Foreground" Value="#0D47A1"/>
+                                                        <Setter Property="FontWeight" Value="Bold"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBlock FontSize="8" 
+                                               Text=" parallel"
+                                               Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                                               VerticalAlignment="Center"/>
+                                </StackPanel>
+                                
+                                <!-- Query Count (shown when no cache/parallel data but has query count) -->
+                                <StackPanel Orientation="Horizontal" 
+                                            ToolTip="{Binding QueryCountTooltip}">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding HasCacheData}" Value="False"/>
+                                                        <Condition Binding="{Binding HasParallelData}" Value="False"/>
+                                                        <Condition Binding="{Binding HasQueryCountData}" Value="True"/>
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </MultiDataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+                                    <TextBlock Text="Queries: " FontSize="9" 
+                                               Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding QueryCount}" 
+                                               FontSize="9" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                                               VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                        
                         <!-- Columns List (collapsible) -->
-                        <ScrollViewer Grid.Row="3" 
+                        <ScrollViewer Grid.Row="4" 
                                       VerticalScrollBarVisibility="Auto"
-                                      MaxHeight="120">
+                                      MaxHeight="{Binding ColumnsHeight}">
                             <ScrollViewer.Style>
                                 <Style TargetType="ScrollViewer">
                                     <Setter Property="Visibility" Value="Visible"/>
@@ -330,6 +502,32 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </ScrollViewer>
+                        
+                        <!-- Resize Grip (only visible when not collapsed) -->
+                        <Border Grid.Row="5" 
+                                Height="8"
+                                CornerRadius="0,0,4,4"
+                                Background="{DynamicResource Theme.Brush.MenuBar.Back}"
+                                Cursor="SizeNS"
+                                MouseLeftButtonDown="ResizeGrip_MouseLeftButtonDown"
+                                MouseMove="ResizeGrip_MouseMove"
+                                MouseLeftButtonUp="ResizeGrip_MouseLeftButtonUp"
+                                ToolTip="Drag to resize columns area">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsCollapsed}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <!-- Grip indicator lines -->
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Rectangle Width="20" Height="2" Fill="#999" Margin="0,0,0,0" RadiusX="1" RadiusY="1"/>
+                            </StackPanel>
+                        </Border>
                     </Grid>
                 </Border>
                 
@@ -411,6 +609,20 @@
                         cal:Message.Attach="[Event Click] = [Action ExportToImage]"
                         ToolTip="Export diagram as PNG image"/>
                 
+                <ToggleButton DockPanel.Dock="Right"
+                              Content="🔥 Bottlenecks"
+                              Margin="4,8"
+                              Padding="12,4"
+                              IsChecked="{Binding ShowBottlenecks}"
+                              ToolTip="Highlight slowest tables (performance bottlenecks)"/>
+                
+                <Button DockPanel.Dock="Right"
+                        Content="Zoom to Fit"
+                        Margin="4,8"
+                        Padding="12,4"
+                        cal:Message.Attach="[Event Click] = [Action ZoomToFit]"
+                        ToolTip="Zoom to fit all tables in view"/>
+                
                 <Button DockPanel.Dock="Right"
                         Content="Clear Selection"
                         Margin="4,8"
@@ -444,7 +656,8 @@
                       Grid.Row="1"
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto"
-                      Background="{DynamicResource Theme.Brush.Content.Back}">
+                      Background="{DynamicResource Theme.Brush.Content.Back}"
+                      PreviewMouseWheel="ScrollViewer_PreviewMouseWheel">
             <Grid x:Name="DiagramCanvas"
                   MinWidth="{Binding ActualWidth, ElementName=MainScrollViewer}"
                   MinHeight="{Binding ActualHeight, ElementName=MainScrollViewer}"
@@ -452,6 +665,9 @@
                   Height="{Binding CanvasHeight}"
                   MouseLeftButtonDown="Canvas_MouseLeftButtonDown"
                   Background="{DynamicResource Theme.Brush.Content.Back}">
+                <Grid.LayoutTransform>
+                    <ScaleTransform x:Name="CanvasScaleTransform" ScaleX="1" ScaleY="1"/>
+                </Grid.LayoutTransform>
                 
                 <!-- Context Menu for Canvas -->
                 <Grid.ContextMenu>
@@ -485,8 +701,11 @@
                         <MenuItem Header="Zoom">
                             <MenuItem Header="Zoom In" cal:Message.Attach="[Event Click] = [Action ZoomIn]"/>
                             <MenuItem Header="Zoom Out" cal:Message.Attach="[Event Click] = [Action ZoomOut]"/>
-                            <MenuItem Header="Reset Zoom" cal:Message.Attach="[Event Click] = [Action ResetZoom]"/>
+                            <MenuItem Header="Zoom to Fit" cal:Message.Attach="[Event Click] = [Action ZoomToFit]"/>
+                            <MenuItem Header="Reset Zoom (100%)" cal:Message.Attach="[Event Click] = [Action ResetZoom]"/>
                         </MenuItem>
+                        <Separator/>
+                        <MenuItem Header="Toggle Bottleneck Highlighting" cal:Message.Attach="[Event Click] = [Action ToggleBottlenecks]"/>
                     </ContextMenu>
                 </Grid.ContextMenu>
                 
@@ -711,4 +930,4 @@
                    TextWrapping="Wrap"
                    Margin="40"/>
     </Grid>
-</ctrl:ZoomableUserControl>
+</UserControl>

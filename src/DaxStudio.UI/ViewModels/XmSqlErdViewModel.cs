@@ -1,4 +1,6 @@
 using Caliburn.Micro;
+using DaxStudio.Common.Enums;
+using DaxStudio.QueryTrace;
 using DaxStudio.UI.Interfaces;
 using DaxStudio.UI.Model;
 using DaxStudio.UI.Utils;
@@ -188,6 +190,41 @@ namespace DaxStudio.UI.ViewModels
             set { _canvasHeight = value; NotifyOfPropertyChange(); }
         }
 
+        private double _viewWidth = 800;
+        /// <summary>
+        /// The actual width of the view (set by code-behind).
+        /// </summary>
+        public double ViewWidth
+        {
+            get => _viewWidth;
+            set { _viewWidth = value; NotifyOfPropertyChange(); }
+        }
+
+        private double _viewHeight = 600;
+        /// <summary>
+        /// The actual height of the view (set by code-behind).
+        /// </summary>
+        public double ViewHeight
+        {
+            get => _viewHeight;
+            set { _viewHeight = value; NotifyOfPropertyChange(); }
+        }
+
+        private bool _showBottlenecks;
+        /// <summary>
+        /// Whether to highlight bottleneck tables (slowest tables).
+        /// </summary>
+        public bool ShowBottlenecks
+        {
+            get => _showBottlenecks;
+            set
+            {
+                _showBottlenecks = value;
+                NotifyOfPropertyChange();
+                UpdateBottleneckHighlighting();
+            }
+        }
+
         #endregion
 
         #region Methods
@@ -212,7 +249,17 @@ namespace DaxStudio.UI.ViewModels
                     // Only parse scan events that have query text
                     if (evt.IsScanEvent && !string.IsNullOrWhiteSpace(evt.Query))
                     {
-                        _parser.ParseQuery(evt.Query, _analysis, evt.EstimatedRows, evt.Duration);
+                        // Build full metrics including cache hit status and parallelism data
+                        var metrics = new XmSqlParser.SeEventMetrics
+                        {
+                            EstimatedRows = evt.EstimatedRows,
+                            DurationMs = evt.Duration,
+                            IsCacheHit = evt.Class == DaxStudioTraceEventClass.VertiPaqSEQueryCacheMatch,
+                            CpuTimeMs = evt.CpuTime,
+                            CpuFactor = evt.CpuFactor,
+                            NetParallelDurationMs = evt.NetParallelDuration
+                        };
+                        _parser.ParseQueryWithMetrics(evt.Query, _analysis, metrics);
                     }
                 }
 
@@ -586,6 +633,93 @@ namespace DaxStudio.UI.ViewModels
             Scale = 1.0;
         }
 
+        /// <summary>
+        /// Zooms to fit all tables within the visible view area.
+        /// </summary>
+        public void ZoomToFit()
+        {
+            if (Tables.Count == 0) return;
+
+            // Calculate bounds of all tables
+            var minX = Tables.Min(t => t.X);
+            var minY = Tables.Min(t => t.Y);
+            var maxX = Tables.Max(t => t.X + t.Width);
+            var maxY = Tables.Max(t => t.Y + t.Height);
+
+            var contentWidth = maxX - minX + 80; // Add padding
+            var contentHeight = maxY - minY + 80;
+
+            // Calculate scale to fit
+            var scaleX = ViewWidth / contentWidth;
+            var scaleY = ViewHeight / contentHeight;
+            var newScale = Math.Min(scaleX, scaleY);
+
+            // Clamp to reasonable bounds
+            newScale = Math.Max(0.25, Math.Min(2.0, newScale));
+
+            Scale = newScale;
+        }
+
+        #endregion
+
+        #region Bottleneck Analysis
+
+        /// <summary>
+        /// Toggles bottleneck highlighting on/off.
+        /// </summary>
+        public void ToggleBottlenecks()
+        {
+            ShowBottlenecks = !ShowBottlenecks;
+        }
+
+        /// <summary>
+        /// Updates bottleneck highlighting on all tables based on their duration.
+        /// Tables in the top 20% of duration are marked as bottlenecks.
+        /// </summary>
+        private void UpdateBottleneckHighlighting()
+        {
+            if (!_showBottlenecks)
+            {
+                // Clear all bottleneck flags
+                foreach (var table in Tables)
+                {
+                    table.IsBottleneck = false;
+                    table.BottleneckRank = 0;
+                }
+                return;
+            }
+
+            // Calculate bottleneck threshold (top 20% or top 3, whichever is smaller)
+            var tablesWithDuration = Tables
+                .Where(t => t.TotalDurationMs > 0)
+                .OrderByDescending(t => t.TotalDurationMs)
+                .ToList();
+
+            if (tablesWithDuration.Count == 0) return;
+
+            var bottleneckCount = Math.Max(1, Math.Min(3, (int)Math.Ceiling(tablesWithDuration.Count * 0.2)));
+            var threshold = tablesWithDuration.Count > bottleneckCount 
+                ? tablesWithDuration[bottleneckCount - 1].TotalDurationMs 
+                : 0;
+
+            // Mark bottleneck tables
+            var rank = 1;
+            foreach (var table in Tables)
+            {
+                if (tablesWithDuration.Contains(table) && 
+                    tablesWithDuration.IndexOf(table) < bottleneckCount)
+                {
+                    table.IsBottleneck = true;
+                    table.BottleneckRank = rank++;
+                }
+                else
+                {
+                    table.IsBottleneck = false;
+                    table.BottleneckRank = 0;
+                }
+            }
+        }
+
         #endregion
 
         #region Selection and Highlighting
@@ -730,7 +864,34 @@ namespace DaxStudio.UI.ViewModels
             sb.AppendLine();
             sb.AppendLine("Usage:");
             if (column.IsJoinColumn) sb.AppendLine("  🔑 Join Key");
-            if (column.IsFilterColumn) sb.AppendLine("  🔍 Filter");
+            if (column.IsFilterColumn)
+            {
+                sb.AppendLine("  🔍 Filter");
+                // Show filter values if available
+                if (column.HasFilterValues)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("Filter Values:");
+                    var ops = column.FilterOperators.Any() 
+                        ? string.Join("/", column.FilterOperators) 
+                        : "";
+                    if (!string.IsNullOrEmpty(ops))
+                    {
+                        sb.AppendLine($"  Operators: {ops}");
+                    }
+                    
+                    // Show values (limit display to first 15)
+                    var values = column.FilterValues.Take(15).ToList();
+                    foreach (var value in values)
+                    {
+                        sb.AppendLine($"  • {value}");
+                    }
+                    if (column.FilterValues.Count > 15)
+                    {
+                        sb.AppendLine($"  ... and {column.FilterValues.Count - 15} more values");
+                    }
+                }
+            }
             if (column.IsAggregateColumn) sb.AppendLine($"  📈 Aggregate ({column.AggregationText})");
             if (column.IsSelectColumn) sb.AppendLine("  ✓ Selected/Output");
             
@@ -745,6 +906,13 @@ namespace DaxStudio.UI.ViewModels
                 }
             }
             
+            // Add table cache info if available
+            if (table.HasCacheData)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"Table Cache Rate: {table.CacheHitRateFormatted}");
+            }
+            
             SelectedDetailInfo = sb.ToString();
         }
 
@@ -757,6 +925,7 @@ namespace DaxStudio.UI.ViewModels
             sb.AppendLine($"📊 Table: {table.TableName}");
             sb.AppendLine();
             sb.AppendLine($"SE Query Hits: {table.HitCount}");
+            sb.AppendLine($"SE Queries: {table.QueryCount}");
             sb.AppendLine($"Columns Used: {table.Columns.Count}");
             sb.AppendLine();
             
@@ -773,9 +942,51 @@ namespace DaxStudio.UI.ViewModels
                     sb.AppendLine("  Consider adding filters or optimizing the query");
                 }
             }
-            else
+            
+            if (table.HasDurationData)
             {
-                sb.AppendLine("No row count data available");
+                sb.AppendLine();
+                sb.AppendLine("Duration:");
+                sb.AppendLine($"  Total: {table.TotalDurationFormatted}");
+                sb.AppendLine($"  Max Single: {table.MaxDurationMs}ms");
+            }
+            
+            if (table.HasCacheData)
+            {
+                sb.AppendLine();
+                sb.AppendLine("Cache Statistics:");
+                sb.AppendLine($"  Hits: {table.CacheHits}");
+                sb.AppendLine($"  Misses: {table.CacheMisses}");
+                sb.AppendLine($"  Hit Rate: {table.CacheHitRateFormatted}");
+            }
+            
+            if (table.HasParallelData)
+            {
+                sb.AppendLine();
+                sb.AppendLine("Parallelism:");
+                sb.AppendLine($"  Parallel Queries: {table.ParallelQueryCount}");
+                sb.AppendLine($"  Max CPU Factor: {table.MaxCpuFactor:0.0}x");
+                sb.AppendLine($"  Total CPU Time: {table.TotalCpuTimeMs}ms");
+            }
+            
+            // List columns with filters
+            var filterColumns = table.Columns.Where(c => c.IsFilterColumn && c.HasFilterValues).ToList();
+            if (filterColumns.Any())
+            {
+                sb.AppendLine();
+                sb.AppendLine("Filtered Columns:");
+                foreach (var col in filterColumns.Take(5))
+                {
+                    var preview = col.FilterValues.Take(3);
+                    var previewText = string.Join(", ", preview);
+                    if (col.FilterValues.Count > 3)
+                        previewText += "...";
+                    sb.AppendLine($"  • [{col.ColumnName}]: {previewText}");
+                }
+                if (filterColumns.Count > 5)
+                {
+                    sb.AppendLine($"  ... and {filterColumns.Count - 5} more filtered columns");
+                }
             }
             
             SelectedDetailInfo = sb.ToString();
@@ -1057,6 +1268,140 @@ namespace DaxStudio.UI.ViewModels
         /// Whether this table has high duration (>100ms total).
         /// </summary>
         public bool HasHighDuration => TotalDurationMs >= 100;
+
+        #region Cache Hit/Miss Tracking
+        
+        /// <summary>
+        /// Number of cache hits for queries on this table.
+        /// </summary>
+        public int CacheHits => _tableInfo.CacheHits;
+        
+        /// <summary>
+        /// Number of cache misses for queries on this table.
+        /// </summary>
+        public int CacheMisses => _tableInfo.CacheMisses;
+        
+        /// <summary>
+        /// Total queries (cache hits + misses) for this table.
+        /// </summary>
+        public int TotalCacheQueries => CacheHits + CacheMisses;
+        
+        /// <summary>
+        /// Cache hit rate as a percentage (0-100).
+        /// </summary>
+        public double CacheHitRate => TotalCacheQueries > 0 ? (double)CacheHits / TotalCacheQueries * 100 : 0;
+        
+        /// <summary>
+        /// Formatted cache hit rate string.
+        /// </summary>
+        public string CacheHitRateFormatted => $"{CacheHitRate:0}%";
+        
+        /// <summary>
+        /// Whether this table has cache data to display.
+        /// </summary>
+        public bool HasCacheData => TotalCacheQueries > 0;
+        
+        /// <summary>
+        /// Whether cache hit rate is good (>= 50%).
+        /// </summary>
+        public bool HasGoodCacheRate => CacheHitRate >= 50;
+        
+        /// <summary>
+        /// Whether cache hit rate is poor (< 20%).
+        /// </summary>
+        public bool HasPoorCacheRate => CacheHitRate < 20 && TotalCacheQueries > 0;
+        
+        /// <summary>
+        /// Cache indicator tooltip text.
+        /// </summary>
+        public string CacheTooltip => $"Cache: {CacheHits} hits, {CacheMisses} misses ({CacheHitRateFormatted} hit rate)";
+        
+        #endregion
+
+        #region Query Count Tracking
+        
+        /// <summary>
+        /// Number of distinct SE queries that accessed this table.
+        /// </summary>
+        public int QueryCount => _tableInfo.QueryCount;
+        
+        /// <summary>
+        /// Whether this table has query count data.
+        /// </summary>
+        public bool HasQueryCountData => QueryCount > 0;
+        
+        /// <summary>
+        /// Query count tooltip.
+        /// </summary>
+        public string QueryCountTooltip => $"{QueryCount} SE queries";
+        
+        #endregion
+
+        #region Parallelism Tracking
+        
+        /// <summary>
+        /// Total CPU time (ms) across all queries for this table.
+        /// </summary>
+        public long TotalCpuTimeMs => _tableInfo.TotalCpuTimeMs;
+        
+        /// <summary>
+        /// Total parallel duration saved (ms) from parallel execution.
+        /// </summary>
+        public long TotalParallelDurationMs => _tableInfo.TotalParallelDurationMs;
+        
+        /// <summary>
+        /// Maximum CPU factor observed for this table (higher = more parallelism).
+        /// </summary>
+        public double MaxCpuFactor => _tableInfo.MaxCpuFactor;
+        
+        /// <summary>
+        /// Number of queries that ran in parallel for this table.
+        /// </summary>
+        public int ParallelQueryCount => _tableInfo.ParallelQueryCount;
+        
+        /// <summary>
+        /// Whether this table had queries that ran in parallel.
+        /// </summary>
+        public bool HasParallelData => ParallelQueryCount > 0;
+        
+        /// <summary>
+        /// Whether this table has high parallelism (CpuFactor >= 2).
+        /// </summary>
+        public bool HasHighParallelism => MaxCpuFactor >= 2.0;
+        
+        /// <summary>
+        /// Formatted CPU factor for display.
+        /// </summary>
+        public string CpuFactorFormatted => MaxCpuFactor > 0 ? $"{MaxCpuFactor:0.0}x" : "";
+        
+        /// <summary>
+        /// Parallelism indicator tooltip.
+        /// </summary>
+        public string ParallelismTooltip => HasParallelData 
+            ? $"Parallelism: {ParallelQueryCount} parallel queries, max {MaxCpuFactor:0.0}x CPU factor, {FormatDuration(TotalParallelDurationMs)} saved"
+            : "No parallel execution detected";
+        
+        #endregion
+
+        private bool _isBottleneck;
+        /// <summary>
+        /// Whether this table is identified as a performance bottleneck.
+        /// </summary>
+        public bool IsBottleneck
+        {
+            get => _isBottleneck;
+            set { _isBottleneck = value; NotifyOfPropertyChange(); }
+        }
+
+        private int _bottleneckRank;
+        /// <summary>
+        /// The rank of this bottleneck (1 = slowest, 2 = second slowest, etc.). 0 if not a bottleneck.
+        /// </summary>
+        public int BottleneckRank
+        {
+            get => _bottleneckRank;
+            set { _bottleneckRank = value; NotifyOfPropertyChange(); }
+        }
         
         private bool _isCollapsed;
         /// <summary>
@@ -1286,6 +1631,21 @@ namespace DaxStudio.UI.ViewModels
             set { _height = value; NotifyOfPropertyChange(); NotifyOfPropertyChange(nameof(CenterY)); }
         }
 
+        private double _columnsHeight = 120;
+        /// <summary>
+        /// Height of the columns area (resizable by user).
+        /// </summary>
+        public double ColumnsHeight
+        {
+            get => _columnsHeight;
+            set 
+            { 
+                // Clamp between min and max
+                _columnsHeight = Math.Max(40, Math.Min(400, value)); 
+                NotifyOfPropertyChange(); 
+            }
+        }
+
         // Center point for drawing relationship lines
         public double CenterX => X + Width / 2;
         public double CenterY => Y + Height / 2;
@@ -1324,6 +1684,52 @@ namespace DaxStudio.UI.ViewModels
         public string AggregationText => _columnInfo.AggregationTypes.Count > 0
             ? string.Join(", ", _columnInfo.AggregationTypes)
             : string.Empty;
+
+        /// <summary>
+        /// Filter values applied to this column.
+        /// </summary>
+        public IReadOnlyList<string> FilterValues => _columnInfo.FilterValues;
+
+        /// <summary>
+        /// Whether this column has filter values.
+        /// </summary>
+        public bool HasFilterValues => _columnInfo.FilterValues.Count > 0;
+
+        /// <summary>
+        /// Filter operators used on this column.
+        /// </summary>
+        public IEnumerable<string> FilterOperators => _columnInfo.FilterOperators;
+
+        /// <summary>
+        /// Formatted filter values for display (first few values).
+        /// </summary>
+        public string FilterValuesPreview
+        {
+            get
+            {
+                if (!HasFilterValues) return string.Empty;
+                var values = _columnInfo.FilterValues.Take(3).ToList();
+                var preview = string.Join(", ", values);
+                if (_columnInfo.FilterValues.Count > 3)
+                    preview += $", ... (+{_columnInfo.FilterValues.Count - 3} more)";
+                return preview;
+            }
+        }
+
+        /// <summary>
+        /// All filter values formatted for detail panel display.
+        /// </summary>
+        public string FilterValuesFormatted
+        {
+            get
+            {
+                if (!HasFilterValues) return string.Empty;
+                var ops = _columnInfo.FilterOperators.Any() 
+                    ? string.Join("/", _columnInfo.FilterOperators) 
+                    : "=";
+                return $"[{ops}] {string.Join(", ", _columnInfo.FilterValues)}";
+            }
+        }
 
         /// <summary>
         /// Tooltip text explaining the column usage icons.

@@ -158,6 +158,43 @@ namespace DaxStudio.UI.Model
         public long MaxDurationMs { get; set; }
 
         /// <summary>
+        /// Number of SE queries that hit the cache for this table (VertiPaqSEQueryCacheMatch).
+        /// </summary>
+        public int CacheHits { get; set; }
+
+        /// <summary>
+        /// Number of SE queries that missed the cache (actual scans) for this table.
+        /// </summary>
+        public int CacheMisses { get; set; }
+
+        /// <summary>
+        /// Number of distinct SE queries referencing this table.
+        /// </summary>
+        public int QueryCount { get; set; }
+
+        /// <summary>
+        /// Total CPU time (ms) across all SE queries for this table.
+        /// </summary>
+        public long TotalCpuTimeMs { get; set; }
+
+        /// <summary>
+        /// Total parallel duration (ms) across all SE queries for this table.
+        /// NetParallelDuration shows the "saved" time from parallelism.
+        /// </summary>
+        public long TotalParallelDurationMs { get; set; }
+
+        /// <summary>
+        /// Maximum CPU factor seen for this table (CpuTime/Duration ratio).
+        /// Higher values indicate more parallel execution.
+        /// </summary>
+        public double MaxCpuFactor { get; set; }
+
+        /// <summary>
+        /// Number of SE queries that showed parallel execution (CpuFactor > 1).
+        /// </summary>
+        public int ParallelQueryCount { get; set; }
+
+        /// <summary>
         /// Whether this table appeared in a FROM clause (base table).
         /// </summary>
         public bool IsFromTable { get; set; }
@@ -232,12 +269,41 @@ namespace DaxStudio.UI.Model
         public HashSet<string> AggregationTypes { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// Filter values applied to this column (extracted from WHERE clauses).
+        /// </summary>
+        public List<string> FilterValues { get; } = new List<string>();
+
+        /// <summary>
+        /// Filter operators used with this column (=, IN, >, <, etc.)
+        /// </summary>
+        public HashSet<string> FilterOperators { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// Adds a usage type to this column.
         /// </summary>
         public void AddUsage(XmSqlColumnUsage usage)
         {
             UsageTypes |= usage;
             HitCount++;
+        }
+
+        /// <summary>
+        /// Adds a filter value to this column.
+        /// </summary>
+        public void AddFilterValue(string value, string op = "=")
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                // Limit total filter values to avoid memory issues with large datasets
+                if (FilterValues.Count < 50 && !FilterValues.Contains(value))
+                {
+                    FilterValues.Add(value);
+                }
+                if (!string.IsNullOrWhiteSpace(op))
+                {
+                    FilterOperators.Add(op.Trim());
+                }
+            }
         }
 
         /// <summary>
