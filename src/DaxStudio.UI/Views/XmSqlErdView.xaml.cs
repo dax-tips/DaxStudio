@@ -535,7 +535,7 @@ namespace DaxStudio.UI.Views
         #region Detail Panel Resize
 
         private bool _isDetailPanelResizing;
-        private double _detailPanelStartHeight;
+        private double _detailPanelStartWidth;
         private Point _detailPanelResizeStart;
 
         private void DetailPanel_ResizeStart(object sender, MouseButtonEventArgs e)
@@ -543,7 +543,7 @@ namespace DaxStudio.UI.Views
             if (DataContext is XmSqlErdViewModel vm)
             {
                 _isDetailPanelResizing = true;
-                _detailPanelStartHeight = vm.DetailPanelHeight;
+                _detailPanelStartWidth = vm.DetailPanelWidth;
                 _detailPanelResizeStart = e.GetPosition(this);
                 ((UIElement)sender).CaptureMouse();
                 e.Handled = true;
@@ -555,9 +555,9 @@ namespace DaxStudio.UI.Views
             if (_isDetailPanelResizing && DataContext is XmSqlErdViewModel vm)
             {
                 var currentPos = e.GetPosition(this);
-                // Dragging up increases height, dragging down decreases
-                var delta = _detailPanelResizeStart.Y - currentPos.Y;
-                vm.DetailPanelHeight = _detailPanelStartHeight + delta;
+                // Dragging left increases width, dragging right decreases
+                var delta = _detailPanelResizeStart.X - currentPos.X;
+                vm.DetailPanelWidth = _detailPanelStartWidth + delta;
                 e.Handled = true;
             }
         }

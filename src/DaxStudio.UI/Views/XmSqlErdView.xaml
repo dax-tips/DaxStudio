@@ -636,8 +636,6 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         
         <!-- Toolbar -->
@@ -787,14 +785,28 @@
             </DockPanel>
         </ctrl:ClipBorder>
         
-        <!-- Main Canvas Area with Mini-map Overlay -->
+        <!-- Main Content Area with Detail Panel on Right -->
         <Grid Grid.Row="1">
-            <ScrollViewer x:Name="MainScrollViewer"
-                          HorizontalScrollBarVisibility="Auto"
-                          VerticalScrollBarVisibility="Auto"
-                          Background="{DynamicResource Theme.Brush.Content.Back}"
-                          PreviewMouseWheel="ScrollViewer_PreviewMouseWheel"
-                          ScrollChanged="MainScrollViewer_ScrollChanged">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            
+            <!-- Left: Canvas and Status Bar -->
+            <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+        
+                <!-- Main Canvas Area with Mini-map Overlay -->
+                <Grid Grid.Row="0">
+                    <ScrollViewer x:Name="MainScrollViewer"
+                              HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollBarVisibility="Auto"
+                              Background="{DynamicResource Theme.Brush.Content.Back}"
+                              PreviewMouseWheel="ScrollViewer_PreviewMouseWheel"
+                              ScrollChanged="MainScrollViewer_ScrollChanged">
             <Grid x:Name="DiagramCanvas"
                   MinWidth="{Binding ActualWidth, ElementName=MainScrollViewer}"
                   MinHeight="{Binding ActualHeight, ElementName=MainScrollViewer}"
@@ -1110,151 +1122,161 @@
                     </Canvas>
                 </Grid>
             </Border>
-        </Grid>
-        
-        <!-- Status Bar -->
-        <ctrl:ClipBorder Grid.Row="2"
-                         CornerRadius="4"
-                         Background="{DynamicResource Theme.Brush.StatusBar.Back}"
-                         Margin="0,8,0,0"
-                         Padding="10,6">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                
-                <TextBlock Grid.Column="0"
-                           Text="{Binding SummaryText}"
-                           Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}"
-                           VerticalAlignment="Center"/>
-                
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="Legend: " 
-                               Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}"
-                               VerticalAlignment="Center"
-                               Margin="0,0,8,0"/>
-                    
-                    <!-- Join Key -->
-                    <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
-                        <Grid Width="12" Height="12" Margin="0,0,4,0" VerticalAlignment="Center">
-                            <Ellipse Width="7" Height="7" Fill="#DAA520" HorizontalAlignment="Left" VerticalAlignment="Top"/>
-                            <Ellipse Width="3" Height="3" Fill="{DynamicResource Theme.Brush.StatusBar.Back}" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="2,2,0,0"/>
-                            <Rectangle Width="6" Height="2" Fill="#DAA520" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,1,0,0"/>
-                            <Rectangle Width="2" Height="2" Fill="#DAA520" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,1,2"/>
-                        </Grid>
-                        <TextBlock Text="Join Key" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"/>
-                    </StackPanel>
-                    
-                    <!-- Filter -->
-                    <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
-                        <Path Data="M0,0 L10,0 L6,5 L6,9 L4,10 L4,5 Z"
-                              Fill="#9932CC" Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                        <TextBlock Text="Filter" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"/>
-                    </StackPanel>
-                    
-                    <!-- Aggregate -->
-                    <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
-                        <Path Data="M0,0 L8,0 L8,2 L3,2 L6,5 L3,8 L8,8 L8,10 L0,10 L0,8 L4,5 L0,2 Z"
-                              Fill="#1E90FF" Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                        <TextBlock Text="Aggregate" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"/>
-                    </StackPanel>
-                    
-                    <!-- Select -->
-                    <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
-                        <Path Data="M0,5 L3,8 L9,2 L10,3 L3,10 L-1,6 Z"
-                              Fill="#32CD32" Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                        <TextBlock Text="Select" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"/>
-                    </StackPanel>
-                    
-                    <!-- Callback -->
-                    <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
-                        <Path Data="M7,0 L3,5 L5,5 L2,10 L8,4 L5,4 Z"
-                              Fill="#FF5722" Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                        <TextBlock Text="Callback" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"
-                                   ToolTip="DAX callback - indicates reduced SE efficiency"/>
-                    </StackPanel>
-                    
-                    <!-- Heat indicator -->
-                    <StackPanel Orientation="Horizontal">
-                        <Border Width="12" Height="12" CornerRadius="2" Margin="0,0,4,0" VerticalAlignment="Center">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                    <GradientStop Color="#4CAF50" Offset="0"/>
-                                    <GradientStop Color="#FFC107" Offset="0.5"/>
-                                    <GradientStop Color="#F44336" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.Background>
-                        </Border>
-                        <TextBlock Text="Heat = Usage" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </StackPanel>
             </Grid>
-        </ctrl:ClipBorder>
         
-        <!-- Detail Panel (shows when column, table, or relationship is clicked) -->
-        <ctrl:ClipBorder Grid.Row="3"
-                         CornerRadius="4"
-                         Background="{DynamicResource Theme.Brush.MenuBar.Back}"
-                         Margin="0,8,0,0"
-                         Visibility="{Binding HasSelectedDetail, Converter={StaticResource BoolToCollapsedConverter}}">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-                
-                <!-- Resize Grip at top -->
-                <Border Grid.Row="0"
-                        Height="8"
-                        Background="{DynamicResource Theme.Brush.StatusBar.Back}"
-                        Cursor="SizeNS"
-                        MouseLeftButtonDown="DetailPanel_ResizeStart"
-                        MouseMove="DetailPanel_ResizeMove"
-                        MouseLeftButtonUp="DetailPanel_ResizeEnd"
-                        ToolTip="Drag to resize">
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <Rectangle Width="40" Height="3" Fill="#888" RadiusX="1" RadiusY="1"/>
-                    </StackPanel>
-                </Border>
-                
-                <!-- Header with title and close button -->
-                <Grid Grid.Row="1" Margin="10,4,10,0">
+            <!-- Status Bar -->
+            <ctrl:ClipBorder Grid.Row="1"
+                             CornerRadius="4"
+                             Background="{DynamicResource Theme.Brush.StatusBar.Back}"
+                             Margin="0,8,0,0"
+                             Padding="10,6">
+                <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="Details" 
+                
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding SummaryText}"
+                               Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}"
+                               VerticalAlignment="Center"/>
+                
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="Legend: " 
+                                   Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,8,0"/>
+                    
+                        <!-- Join Key -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
+                            <Grid Width="12" Height="12" Margin="0,0,4,0" VerticalAlignment="Center">
+                                <Ellipse Width="7" Height="7" Fill="#DAA520" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+                                <Ellipse Width="3" Height="3" Fill="{DynamicResource Theme.Brush.StatusBar.Back}" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="2,2,0,0"/>
+                                <Rectangle Width="6" Height="2" Fill="#DAA520" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,1,0,0"/>
+                                <Rectangle Width="2" Height="2" Fill="#DAA520" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,1,2"/>
+                            </Grid>
+                            <TextBlock Text="Join Key" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    
+                        <!-- Filter -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
+                            <Path Data="M0,0 L10,0 L6,5 L6,9 L4,10 L4,5 Z"
+                                  Fill="#9932CC" Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="Filter" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    
+                        <!-- Aggregate -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
+                            <Path Data="M0,0 L8,0 L8,2 L3,2 L6,5 L3,8 L8,8 L8,10 L0,10 L0,8 L4,5 L0,2 Z"
+                                  Fill="#1E90FF" Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="Aggregate" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    
+                        <!-- Select -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
+                            <Path Data="M0,5 L3,8 L9,2 L10,3 L3,10 L-1,6 Z"
+                                  Fill="#32CD32" Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="Select" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    
+                        <!-- Callback -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
+                            <Path Data="M7,0 L3,5 L5,5 L2,10 L8,4 L5,4 Z"
+                                  Fill="#FF5722" Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="Callback" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"
+                                       ToolTip="DAX callback - indicates reduced SE efficiency"/>
+                        </StackPanel>
+                    
+                        <!-- Heat indicator -->
+                        <StackPanel Orientation="Horizontal">
+                            <Border Width="12" Height="12" CornerRadius="2" Margin="0,0,4,0" VerticalAlignment="Center">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                        <GradientStop Color="#4CAF50" Offset="0"/>
+                                        <GradientStop Color="#FFC107" Offset="0.5"/>
+                                        <GradientStop Color="#F44336" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                            </Border>
+                            <TextBlock Text="Heat = Usage" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Grid>
+            </ctrl:ClipBorder>
+        </Grid>
+        
+        <!-- Detail Panel on Right (shows when column, table, or relationship is clicked) -->
+        <ctrl:ClipBorder Grid.Column="1"
+                         CornerRadius="4"
+                         Background="{DynamicResource Theme.Brush.MenuBar.Back}"
+                         Margin="8,0,0,0"
+                         Width="{Binding DetailPanelWidth}"
+                         Visibility="{Binding HasSelectedDetail, Converter={StaticResource BoolToCollapsedConverter}}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                
+                <!-- Resize Grip on left edge -->
+                <Border Grid.Column="0"
+                        Width="8"
+                        Background="{DynamicResource Theme.Brush.StatusBar.Back}"
+                        Cursor="SizeWE"
+                        MouseLeftButtonDown="DetailPanel_ResizeStart"
+                        MouseMove="DetailPanel_ResizeMove"
+                        MouseLeftButtonUp="DetailPanel_ResizeEnd"
+                        ToolTip="Drag to resize">
+                    <StackPanel Orientation="Vertical" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Rectangle Width="3" Height="40" Fill="#888" RadiusX="1" RadiusY="1"/>
+                    </StackPanel>
+                </Border>
+                
+                <!-- Content Column -->
+                <Grid Grid.Column="1">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <!-- Header with title and close button -->
+                    <Grid Grid.Row="0" Margin="10,8,10,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Details" 
                                FontWeight="SemiBold"
                                FontSize="12"
                                Foreground="{DynamicResource Theme.Brush.Default.Fore}"
                                VerticalAlignment="Center"/>
-                    <Button Grid.Column="1"
+                        <Button Grid.Column="1"
                             Content="✕"
                             FontSize="10"
                             Width="20" Height="20"
                             VerticalAlignment="Center"
                             cal:Message.Attach="[Event Click] = [Action ClearDetailSelection]"
                             ToolTip="Close details panel"/>
-                </Grid>
+                    </Grid>
                 
-                <!-- Content -->
-                <ScrollViewer Grid.Row="2" 
+                    <!-- Content -->
+                    <ScrollViewer Grid.Row="1" 
                               VerticalScrollBarVisibility="Auto"
-                              Margin="10,4,10,8"
-                              MaxHeight="{Binding DetailPanelHeight}">
-                    <TextBlock Text="{Binding SelectedDetailInfo}"
+                              HorizontalScrollBarVisibility="Auto"
+                              Margin="10,8,10,8">
+                        <TextBlock Text="{Binding SelectedDetailInfo}"
                                Foreground="{DynamicResource Theme.Brush.Default.Fore}"
                                FontFamily="Consolas"
-                               FontSize="12"
+                               FontSize="11"
                                TextWrapping="NoWrap"/>
-                </ScrollViewer>
+                    </ScrollViewer>
+                </Grid>
             </Grid>
         </ctrl:ClipBorder>
+        </Grid>
         
         <!-- Loading Overlay -->
-        <Grid Grid.RowSpan="4"
+        <Grid Grid.Row="1"
               Visibility="{Binding IsLoading, Converter={StaticResource BoolToCollapsedConverter}}"
               Background="#80000000">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">

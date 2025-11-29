@@ -1324,17 +1324,17 @@ namespace DaxStudio.UI.ViewModels
 
         public bool HasSelectedDetail => !string.IsNullOrEmpty(_selectedDetailInfo);
 
-        private double _detailPanelHeight = 150;
+        private double _detailPanelWidth = 350;
         /// <summary>
-        /// Height of the detail panel (resizable by user).
+        /// Width of the detail panel (resizable by user).
         /// </summary>
-        public double DetailPanelHeight
+        public double DetailPanelWidth
         {
-            get => _detailPanelHeight;
+            get => _detailPanelWidth;
             set
             {
-                // Clamp between min and max
-                _detailPanelHeight = Math.Max(80, Math.Min(400, value));
+                // Clamp between min and max (280 to 600)
+                _detailPanelWidth = Math.Max(280, Math.Min(600, value));
                 NotifyOfPropertyChange();
             }
         }
