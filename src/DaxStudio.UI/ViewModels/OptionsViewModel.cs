@@ -1517,7 +1517,22 @@ namespace DaxStudio.UI.ViewModels
             }
         }
 
-
+        private bool _showModelDiagram;
+        [DataMember, DefaultValue(false)]
+        [Category("Preview")]
+        [DisplayName("Show Model Diagram")]
+        [Description("Enable the Model Diagram feature to visualize the data model structure including tables, columns, and relationships.")]
+        public bool ShowModelDiagram
+        {
+            get => _showModelDiagram;
+            set
+            {
+                _showModelDiagram = value;
+                _eventAggregator.PublishOnUIThreadAsync(new UpdateGlobalOptions());
+                SettingProvider.SetValue(nameof(ShowModelDiagram), value, _isInitializing, this);
+                NotifyOfPropertyChange(() => ShowModelDiagram);
+            }
+        }
 
 
         private bool _showKeyBindings;

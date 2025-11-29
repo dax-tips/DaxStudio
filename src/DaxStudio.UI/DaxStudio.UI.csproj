@@ -842,6 +842,7 @@
     <Compile Include="ViewModels\ServerTimesViewModel.cs" />
     <Compile Include="ViewModels\ServerTimingDetailsViewModel.cs" />
     <Compile Include="ViewModels\XmSqlErdViewModel.cs" />
+    <Compile Include="ViewModels\ModelDiagramViewModel.cs" />
     <Compile Include="ViewModels\StatusBarViewModel.cs" />
     <Compile Include="ViewModels\ToolPaneBaseViewModel.cs" />
     <Compile Include="ViewModels\DocumentTabViewModel.cs" />
@@ -919,6 +920,9 @@
     </Compile>
     <Compile Include="Views\XmSqlErdView.xaml.cs">
       <DependentUpon>XmSqlErdView.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Views\ModelDiagramView.xaml.cs">
+      <DependentUpon>ModelDiagramView.xaml</DependentUpon>
     </Compile>
     <Compile Include="Views\StatusBarView.xaml.cs">
       <DependentUpon>StatusBarView.xaml</DependentUpon>
@@ -1322,6 +1326,10 @@
       <Generator>MSBuild:Compile</Generator>
     </Page>
     <Page Include="Views\XmSqlErdView.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="Views\ModelDiagramView.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>

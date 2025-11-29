@@ -629,6 +629,7 @@ namespace DaxStudio.UI.ViewModels
                 NotifyOfPropertyChange(() => CanDisplayQueryBuilder);
                 NotifyOfPropertyChange(() => DisplayQueryBuilder);
                 NotifyOfPropertyChange(() => FormatQueryDisabledReason);
+                NotifyOfPropertyChange(() => CanShowModelDiagram);
                 if (_activeDocument != null) _activeDocument.PropertyChanged += ActiveDocumentPropertyChanged;
             }
         }
@@ -668,6 +669,7 @@ namespace DaxStudio.UI.ViewModels
                     NotifyOfPropertyChange(() => CanExportAnalysisData);
                     NotifyOfPropertyChange(() => CanExportAllData);
                     NotifyOfPropertyChange(() => IsActiveDocumentConnected);
+                    NotifyOfPropertyChange(() => CanShowModelDiagram);
                     break;
                 case nameof(ActiveDocument.ShowQueryBuilder):
                     NotifyOfPropertyChange(() => DisplayQueryBuilder);
@@ -1164,6 +1166,48 @@ namespace DaxStudio.UI.ViewModels
         {
             await ActiveDocument?.ViewAnalysisDataAsync();
         }
+
+        #region Model Diagram
+
+        /// <summary>
+        /// Whether the Model Diagram feature is enabled in options (preview feature).
+        /// </summary>
+        public bool ShowModelDiagramEnabled => Options.ShowModelDiagram;
+
+        /// <summary>
+        /// Whether we can show the Model Diagram (connected and feature enabled).
+        /// </summary>
+        public bool CanShowModelDiagram => IsActiveDocumentConnected && ShowModelDiagramEnabled;
+
+        /// <summary>
+        /// Shows the Model Diagram tool window.
+        /// </summary>
+        public void ShowModelDiagram()
+        {
+            if (ActiveDocument == null) return;
+            try
+            {
+                var model = ActiveDocument.Connection?.SelectedModel;
+                if (model == null)
+                {
+                    _eventAggregator.PublishOnUIThreadAsync(new OutputMessage(MessageType.Warning, "No model selected. Please connect to a model first."));
+                    return;
+                }
+
+                var diagramViewModel = new ModelDiagramViewModel(_eventAggregator);
+                diagramViewModel.LoadFromModel(model);
+
+                // Publish event to show the tool window in the docking panel
+                _eventAggregator.PublishOnUIThreadAsync(new ShowToolWindowEvent(diagramViewModel));
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, Common.Constants.LogMessageTemplate, nameof(RibbonViewModel), nameof(ShowModelDiagram), "Error showing Model Diagram");
+                _eventAggregator.PublishOnUIThreadAsync(new OutputMessage(MessageType.Error, $"Error showing Model Diagram\n{ex.Message}"));
+            }
+        }
+
+        #endregion
 
         public bool CanExportAllData => IsActiveDocumentConnected;
 
