@@ -219,6 +219,9 @@ namespace DaxStudio.UI.Utils
         private double? _currentQueryCpuFactor;
         private long? _currentQueryNetParallelDurationMs;
 
+        // Stores the current query ID (row number from Server Timings)
+        private int _currentQueryId;
+
         /// <summary>
         /// Extended SE event metrics for parsing.
         /// </summary>
@@ -230,6 +233,7 @@ namespace DaxStudio.UI.Utils
             public long? CpuTimeMs { get; set; }
             public double? CpuFactor { get; set; }
             public long? NetParallelDurationMs { get; set; }
+            public int QueryId { get; set; }
         }
 
         /// <summary>
@@ -274,6 +278,7 @@ namespace DaxStudio.UI.Utils
                 _currentQueryCpuTimeMs = metrics?.CpuTimeMs;
                 _currentQueryCpuFactor = metrics?.CpuFactor;
                 _currentQueryNetParallelDurationMs = metrics?.NetParallelDurationMs;
+                _currentQueryId = metrics?.QueryId ?? 0;
 
                 // Initialize lineage tracking for this query
                 _tempTableLineage = new Dictionary<string, TempTableLineage>(StringComparer.OrdinalIgnoreCase);
@@ -392,6 +397,12 @@ namespace DaxStudio.UI.Utils
                         {
                             table.MaxCpuFactor = _currentQueryCpuFactor.Value;
                         }
+                    }
+                    
+                    // Track which query IDs accessed this table (for Query Plan Integration)
+                    if (_currentQueryId > 0)
+                    {
+                        table.QueryIds.Add(_currentQueryId);
                     }
                 }
             }

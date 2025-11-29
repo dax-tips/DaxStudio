@@ -14,6 +14,7 @@ namespace DaxStudio.UI.Views
     public partial class XmSqlErdView : UserControl
     {
         private bool _isDragging;
+        private bool _clickedOnHeader;
         private Point _dragStartPoint;
         private Point _tableStartPosition;
         private ErdTableViewModel _draggedTable;
@@ -235,9 +236,32 @@ namespace DaxStudio.UI.Views
 
         private void Table_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         {
-            if (_isDragging && sender is FrameworkElement element)
+            if (sender is FrameworkElement element)
             {
+                var wasDragging = _isDragging;
+                var dragDistance = 0.0;
+                
+                if (_isDragging && _coordinateRoot != null)
+                {
+                    var currentPos = e.GetPosition(_coordinateRoot);
+                    dragDistance = (currentPos - _dragStartPoint).Length;
+                }
+                
+                // Check if this was a header click (show table details if didn't drag)
+                if (_clickedOnHeader && element.DataContext is ErdTableViewModel tableVm)
+                {
+                    // If we didn't actually move much, treat as a click and show details
+                    if (dragDistance < 5)
+                    {
+                        if (DataContext is XmSqlErdViewModel erdVm)
+                        {
+                            erdVm.SelectTableDetails(tableVm);
+                        }
+                    }
+                }
+                
                 _isDragging = false;
+                _clickedOnHeader = false;
                 _draggedTable = null;
                 _draggedElement = null;
                 _coordinateRoot = null;
@@ -296,15 +320,27 @@ namespace DaxStudio.UI.Views
 
         private void TableHeader_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            // Only respond to direct clicks on the header, not drag operations
-            if (e.ClickCount == 2 && sender is FrameworkElement element && element.DataContext is ErdTableViewModel tableVm)
+            if (sender is FrameworkElement element && element.DataContext is ErdTableViewModel tableVm)
             {
-                if (DataContext is XmSqlErdViewModel erdVm)
+                // Double-click toggles collapse
+                if (e.ClickCount == 2)
                 {
-                    erdVm.SelectTableDetails(tableVm);
+                    tableVm.ToggleCollapse();
+                    e.Handled = true;
+                    return;
                 }
-                e.Handled = true;
+
+                // Mark that we clicked on the header (for showing details on mouse up)
+                _clickedOnHeader = true;
+                
+                // Let the event bubble up to start dragging
+                // Don't set e.Handled = true here so drag can work
             }
+        }
+
+        private void TableHeader_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            // This may not fire if mouse was captured by parent - logic moved to Table_MouseLeftButtonUp
         }
 
         private void CollapseToggle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -492,6 +528,48 @@ namespace DaxStudio.UI.Views
 
             MainScrollViewer.ScrollToHorizontalOffset(System.Math.Max(0, scrollX));
             MainScrollViewer.ScrollToVerticalOffset(System.Math.Max(0, scrollY));
+        }
+
+        #endregion
+
+        #region Detail Panel Resize
+
+        private bool _isDetailPanelResizing;
+        private double _detailPanelStartHeight;
+        private Point _detailPanelResizeStart;
+
+        private void DetailPanel_ResizeStart(object sender, MouseButtonEventArgs e)
+        {
+            if (DataContext is XmSqlErdViewModel vm)
+            {
+                _isDetailPanelResizing = true;
+                _detailPanelStartHeight = vm.DetailPanelHeight;
+                _detailPanelResizeStart = e.GetPosition(this);
+                ((UIElement)sender).CaptureMouse();
+                e.Handled = true;
+            }
+        }
+
+        private void DetailPanel_ResizeMove(object sender, MouseEventArgs e)
+        {
+            if (_isDetailPanelResizing && DataContext is XmSqlErdViewModel vm)
+            {
+                var currentPos = e.GetPosition(this);
+                // Dragging up increases height, dragging down decreases
+                var delta = _detailPanelResizeStart.Y - currentPos.Y;
+                vm.DetailPanelHeight = _detailPanelStartHeight + delta;
+                e.Handled = true;
+            }
+        }
+
+        private void DetailPanel_ResizeEnd(object sender, MouseButtonEventArgs e)
+        {
+            if (_isDetailPanelResizing)
+            {
+                _isDetailPanelResizing = false;
+                ((UIElement)sender).ReleaseMouseCapture();
+                e.Handled = true;
+            }
         }
 
         #endregion

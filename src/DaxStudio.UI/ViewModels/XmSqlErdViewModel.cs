@@ -225,6 +225,176 @@ namespace DaxStudio.UI.ViewModels
             }
         }
 
+        #region Query Plan Integration
+
+        private List<int> _availableQueryIds = new List<int>();
+        /// <summary>
+        /// Gets the list of available query IDs from the analysis.
+        /// </summary>
+        public List<int> AvailableQueryIds
+        {
+            get => _availableQueryIds;
+            private set
+            {
+                _availableQueryIds = value;
+                NotifyOfPropertyChange();
+                NotifyOfPropertyChange(nameof(HasMultipleQueries));
+                NotifyOfPropertyChange(nameof(MaxQueryId));
+            }
+        }
+
+        /// <summary>
+        /// Whether there are multiple queries to filter (shows the filter UI).
+        /// </summary>
+        public bool HasMultipleQueries => _availableQueryIds.Count > 1;
+
+        /// <summary>
+        /// Maximum query ID (for slider range).
+        /// </summary>
+        public int MaxQueryId => _availableQueryIds.Count > 0 ? _availableQueryIds.Max() : 1;
+
+        private int? _selectedQueryId;
+        /// <summary>
+        /// The currently selected query ID for filtering. Null means show all queries.
+        /// </summary>
+        public int? SelectedQueryId
+        {
+            get => _selectedQueryId;
+            set
+            {
+                _selectedQueryId = value;
+                NotifyOfPropertyChange();
+                NotifyOfPropertyChange(nameof(QueryFilterText));
+                NotifyOfPropertyChange(nameof(QueryFilterDetails));
+                ApplyQueryFilter();
+            }
+        }
+
+        /// <summary>
+        /// Display text for the current query filter state (e.g., "3 of 7").
+        /// </summary>
+        public string QueryFilterText
+        {
+            get
+            {
+                if (!_selectedQueryId.HasValue)
+                    return "All";
+                
+                var currentIndex = _availableQueryIds.IndexOf(_selectedQueryId.Value);
+                return $"{currentIndex + 1} of {_availableQueryIds.Count}";
+            }
+        }
+
+        /// <summary>
+        /// Details about the currently selected query - which tables it accesses.
+        /// </summary>
+        public string QueryFilterDetails
+        {
+            get
+            {
+                if (!_selectedQueryId.HasValue)
+                    return $"Showing all {Tables.Count} tables from {_availableQueryIds.Count} SE queries";
+                
+                var tablesInQuery = Tables.Where(t => t.TableInfo.QueryIds.Contains(_selectedQueryId.Value)).ToList();
+                var tableNames = string.Join(", ", tablesInQuery.Select(t => t.TableName).Take(3));
+                if (tablesInQuery.Count > 3)
+                    tableNames += $" +{tablesInQuery.Count - 3} more";
+                
+                return $"SE Query #{_selectedQueryId.Value}: {tablesInQuery.Count} table(s) - {tableNames}";
+            }
+        }
+
+        /// <summary>
+        /// Clears the query filter to show all tables.
+        /// </summary>
+        public void ClearQueryFilter()
+        {
+            SelectedQueryId = null;
+        }
+
+        /// <summary>
+        /// Filters to show only the previous query.
+        /// </summary>
+        public void PreviousQuery()
+        {
+            if (!_selectedQueryId.HasValue)
+            {
+                // Currently showing all - go to first query
+                if (_availableQueryIds.Count > 0)
+                    SelectedQueryId = _availableQueryIds.First();
+            }
+            else
+            {
+                var currentIndex = _availableQueryIds.IndexOf(_selectedQueryId.Value);
+                if (currentIndex > 0)
+                {
+                    SelectedQueryId = _availableQueryIds[currentIndex - 1];
+                }
+            }
+        }
+
+        /// <summary>
+        /// Filters to show only the next query.
+        /// </summary>
+        public void NextQuery()
+        {
+            if (!_selectedQueryId.HasValue)
+            {
+                // Currently showing all - go to first query
+                if (_availableQueryIds.Count > 0)
+                    SelectedQueryId = _availableQueryIds.First();
+            }
+            else
+            {
+                var currentIndex = _availableQueryIds.IndexOf(_selectedQueryId.Value);
+                if (currentIndex >= 0 && currentIndex < _availableQueryIds.Count - 1)
+                {
+                    SelectedQueryId = _availableQueryIds[currentIndex + 1];
+                }
+            }
+        }
+
+        /// <summary>
+        /// Applies query filter to show/hide tables based on which queries accessed them.
+        /// </summary>
+        private void ApplyQueryFilter()
+        {
+            foreach (var table in Tables)
+            {
+                if (!_selectedQueryId.HasValue)
+                {
+                    // Show all - no query filtering
+                    table.IsQueryFiltered = false;
+                    table.IsQueryHighlighted = false;
+                }
+                else
+                {
+                    // Check if this table was accessed by the selected query
+                    var wasAccessedByQuery = table.TableInfo.QueryIds.Contains(_selectedQueryId.Value);
+                    table.IsQueryFiltered = !wasAccessedByQuery;
+                    table.IsQueryHighlighted = wasAccessedByQuery;
+                }
+            }
+
+            // Also update relationships visibility
+            foreach (var rel in Relationships)
+            {
+                if (!_selectedQueryId.HasValue)
+                {
+                    rel.IsQueryFiltered = false;
+                }
+                else
+                {
+                    // Show relationship only if both tables are visible
+                    var fromTable = Tables.FirstOrDefault(t => t.TableName == rel.FromTable);
+                    var toTable = Tables.FirstOrDefault(t => t.TableName == rel.ToTable);
+                    rel.IsQueryFiltered = (fromTable?.IsQueryFiltered ?? true) || (toTable?.IsQueryFiltered ?? true);
+                }
+            }
+        }
+
+        #endregion
+
         #endregion
 
         #region Methods
@@ -252,6 +422,7 @@ namespace DaxStudio.UI.ViewModels
                         // Build full metrics including cache hit status and parallelism data
                         var metrics = new XmSqlParser.SeEventMetrics
                         {
+                            QueryId = evt.RowNumber,  // Track which query this is for Query Plan Integration
                             EstimatedRows = evt.EstimatedRows,
                             DurationMs = evt.Duration,
                             IsCacheHit = evt.Class == DaxStudioTraceEventClass.VertiPaqSEQueryCacheMatch,
@@ -274,6 +445,9 @@ namespace DaxStudio.UI.ViewModels
 
                 // Layout the diagram
                 LayoutDiagram();
+
+                // Gather available query IDs for query plan integration
+                GatherAvailableQueryIds();
 
                 NotifyOfPropertyChange(nameof(Analysis));
                 NotifyOfPropertyChange(nameof(SummaryText));
@@ -351,6 +525,27 @@ namespace DaxStudio.UI.ViewModels
             }
             
             Log.Debug("Total relationship VMs created: {Count}", Relationships.Count);
+        }
+
+        /// <summary>
+        /// Gathers all unique query IDs from the tables for query plan integration.
+        /// </summary>
+        private void GatherAvailableQueryIds()
+        {
+            var allQueryIds = new HashSet<int>();
+            foreach (var table in Tables)
+            {
+                foreach (var queryId in table.TableInfo.QueryIds)
+                {
+                    allQueryIds.Add(queryId);
+                }
+            }
+            AvailableQueryIds = allQueryIds.OrderBy(x => x).ToList();
+            
+            // Clear any previous query filter
+            _selectedQueryId = null;
+            NotifyOfPropertyChange(nameof(SelectedQueryId));
+            NotifyOfPropertyChange(nameof(QueryFilterText));
         }
 
         /// <summary>
@@ -988,6 +1183,21 @@ namespace DaxStudio.UI.ViewModels
 
         public bool HasSelectedDetail => !string.IsNullOrEmpty(_selectedDetailInfo);
 
+        private double _detailPanelHeight = 150;
+        /// <summary>
+        /// Height of the detail panel (resizable by user).
+        /// </summary>
+        public double DetailPanelHeight
+        {
+            get => _detailPanelHeight;
+            set
+            {
+                // Clamp between min and max
+                _detailPanelHeight = Math.Max(80, Math.Min(400, value));
+                NotifyOfPropertyChange();
+            }
+        }
+
         /// <summary>
         /// Shows details for a clicked column.
         /// </summary>
@@ -1060,13 +1270,23 @@ namespace DaxStudio.UI.ViewModels
             var sb = new System.Text.StringBuilder();
             sb.AppendLine($"📊 Table: {table.TableName}");
             sb.AppendLine();
-            sb.AppendLine($"SE Query Hits: {table.HitCount}");
-            sb.AppendLine($"SE Queries: {table.QueryCount}");
-            sb.AppendLine($"Columns Used: {table.Columns.Count}");
-            sb.AppendLine();
             
+            // Basic stats
+            sb.AppendLine("Overview:");
+            sb.AppendLine($"  SE Query Hits: {table.HitCount}");
+            sb.AppendLine($"  SE Queries: {table.QueryCount}");
+            sb.AppendLine($"  Columns Used: {table.Columns.Count}");
+            
+            // Query IDs
+            if (table.HasQueryIds)
+            {
+                sb.AppendLine($"  Query IDs: {table.QueryIdsFormatted}");
+            }
+            
+            // Row statistics
             if (table.HasRowCountData)
             {
+                sb.AppendLine();
                 sb.AppendLine("Row Statistics:");
                 sb.AppendLine($"  Total Rows Scanned: {table.TotalEstimatedRows:N0}");
                 sb.AppendLine($"  Max Single Scan: {table.MaxEstimatedRows:N0}");
@@ -1079,14 +1299,21 @@ namespace DaxStudio.UI.ViewModels
                 }
             }
             
+            // Duration
             if (table.HasDurationData)
             {
                 sb.AppendLine();
                 sb.AppendLine("Duration:");
                 sb.AppendLine($"  Total: {table.TotalDurationFormatted}");
                 sb.AppendLine($"  Max Single: {table.MaxDurationMs}ms");
+                
+                if (table.HasHighDuration)
+                {
+                    sb.AppendLine("  ⚠ High duration - potential bottleneck");
+                }
             }
             
+            // Cache
             if (table.HasCacheData)
             {
                 sb.AppendLine();
@@ -1094,8 +1321,14 @@ namespace DaxStudio.UI.ViewModels
                 sb.AppendLine($"  Hits: {table.CacheHits}");
                 sb.AppendLine($"  Misses: {table.CacheMisses}");
                 sb.AppendLine($"  Hit Rate: {table.CacheHitRateFormatted}");
+                
+                if (table.HasPoorCacheRate)
+                {
+                    sb.AppendLine("  ⚠ Poor cache hit rate");
+                }
             }
             
+            // Parallelism
             if (table.HasParallelData)
             {
                 sb.AppendLine();
@@ -1103,6 +1336,24 @@ namespace DaxStudio.UI.ViewModels
                 sb.AppendLine($"  Parallel Queries: {table.ParallelQueryCount}");
                 sb.AppendLine($"  Max CPU Factor: {table.MaxCpuFactor:0.0}x");
                 sb.AppendLine($"  Total CPU Time: {table.TotalCpuTimeMs}ms");
+                
+                if (table.HasHighParallelism)
+                {
+                    sb.AppendLine("  ℹ High parallelism detected");
+                }
+            }
+            
+            // Callbacks warning
+            if (table.HasCallbacks)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"⚠ Callbacks Detected: {table.CallbackColumnCount} column(s)");
+                sb.AppendLine("  DAX callbacks reduce SE efficiency");
+                var callbackCols = table.Columns.Where(c => c.HasCallback).Take(3);
+                foreach (var col in callbackCols)
+                {
+                    sb.AppendLine($"  • [{col.ColumnName}]");
+                }
             }
             
             // List columns with filters
@@ -1125,6 +1376,25 @@ namespace DaxStudio.UI.ViewModels
                 }
             }
             
+            // List relationships this table participates in
+            var tableRelationships = Relationships.Where(r => 
+                r.FromTable == table.TableName || r.ToTable == table.TableName).ToList();
+            if (tableRelationships.Any())
+            {
+                sb.AppendLine();
+                sb.AppendLine("Relationships:");
+                foreach (var rel in tableRelationships.Take(5))
+                {
+                    var direction = rel.FromTable == table.TableName ? "→" : "←";
+                    var otherTable = rel.FromTable == table.TableName ? rel.ToTable : rel.FromTable;
+                    sb.AppendLine($"  {direction} {otherTable} ({rel.JoinTypeText})");
+                }
+                if (tableRelationships.Count > 5)
+                {
+                    sb.AppendLine($"  ... and {tableRelationships.Count - 5} more relationships");
+                }
+            }
+            
             SelectedDetailInfo = sb.ToString();
         }
 
@@ -1134,13 +1404,53 @@ namespace DaxStudio.UI.ViewModels
         public void SelectRelationship(ErdRelationshipViewModel relationship)
         {
             var sb = new System.Text.StringBuilder();
-            sb.AppendLine($"🔗 Relationship");
+            sb.AppendLine($"🔗 Relationship: {relationship.FromTable} → {relationship.ToTable}");
             sb.AppendLine();
-            sb.AppendLine($"From: {relationship.FromTable}[{relationship.FromColumn}]");
-            sb.AppendLine($"To: {relationship.ToTable}[{relationship.ToColumn}]");
+            sb.AppendLine("Connection:");
+            sb.AppendLine($"  From: {relationship.FromTable}[{relationship.FromColumn}]");
+            sb.AppendLine($"  To:   {relationship.ToTable}[{relationship.ToColumn}]");
             sb.AppendLine();
-            sb.AppendLine($"Join Type: {relationship.JoinTypeText}");
-            sb.AppendLine($"Hit Count: {relationship.HitCount}");
+            sb.AppendLine("Properties:");
+            sb.AppendLine($"  Join Type: {relationship.JoinTypeText}");
+            sb.AppendLine($"  Hit Count: {relationship.HitCount}");
+            
+            // Cardinality info
+            if (relationship.Cardinality != XmSqlCardinality.Unknown)
+            {
+                sb.AppendLine($"  Cardinality: {relationship.CardinalityText}");
+                if (relationship.IsManyToMany)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("⚠ Many-to-Many relationship detected");
+                    sb.AppendLine("  This can impact query performance");
+                }
+            }
+            
+            // Cross-filter direction
+            if (relationship.IsBidirectional)
+            {
+                sb.AppendLine($"  Cross-Filter: Bidirectional (Both)");
+                sb.AppendLine();
+                sb.AppendLine("ℹ Bidirectional cross-filtering enabled");
+            }
+            
+            // Get stats from both tables
+            var fromTable = Tables.FirstOrDefault(t => t.TableName == relationship.FromTable);
+            var toTable = Tables.FirstOrDefault(t => t.TableName == relationship.ToTable);
+            
+            if (fromTable != null || toTable != null)
+            {
+                sb.AppendLine();
+                sb.AppendLine("Table Statistics:");
+                if (fromTable != null)
+                {
+                    sb.AppendLine($"  {fromTable.TableName}: {fromTable.HitCount} hits, {fromTable.TotalRowsFormatted} rows");
+                }
+                if (toTable != null)
+                {
+                    sb.AppendLine($"  {toTable.TableName}: {toTable.HitCount} hits, {toTable.TotalRowsFormatted} rows");
+                }
+            }
             
             SelectedDetailInfo = sb.ToString();
         }
@@ -1743,6 +2053,55 @@ namespace DaxStudio.UI.ViewModels
 
         #endregion
 
+        #region Query Plan Integration
+
+        private bool _isQueryFiltered;
+        /// <summary>
+        /// Whether this table is filtered out (not accessed by selected query).
+        /// </summary>
+        public bool IsQueryFiltered
+        {
+            get => _isQueryFiltered;
+            set { _isQueryFiltered = value; NotifyOfPropertyChange(); }
+        }
+
+        private bool _isQueryHighlighted;
+        /// <summary>
+        /// Whether this table is highlighted because it was accessed by the selected query.
+        /// </summary>
+        public bool IsQueryHighlighted
+        {
+            get => _isQueryHighlighted;
+            set { _isQueryHighlighted = value; NotifyOfPropertyChange(); }
+        }
+
+        /// <summary>
+        /// Gets the underlying table info (for accessing QueryIds).
+        /// </summary>
+        public XmSqlTableInfo TableInfo => _tableInfo;
+
+        /// <summary>
+        /// Formatted list of query IDs that accessed this table.
+        /// </summary>
+        public string QueryIdsFormatted
+        {
+            get
+            {
+                if (_tableInfo.QueryIds.Count == 0)
+                    return "";
+                if (_tableInfo.QueryIds.Count <= 5)
+                    return string.Join(", ", _tableInfo.QueryIds.OrderBy(x => x).Select(x => $"#{x}"));
+                return $"#{_tableInfo.QueryIds.Min()}...#{_tableInfo.QueryIds.Max()} ({_tableInfo.QueryIds.Count} queries)";
+            }
+        }
+
+        /// <summary>
+        /// Whether this table has query ID data to display.
+        /// </summary>
+        public bool HasQueryIds => _tableInfo.QueryIds.Count > 0;
+
+        #endregion
+
         #region Dragging
 
         private bool _isDragging;
@@ -2069,6 +2428,16 @@ namespace DaxStudio.UI.ViewModels
         {
             get => _isDimmed;
             set { _isDimmed = value; NotifyOfPropertyChange(); }
+        }
+
+        private bool _isQueryFiltered;
+        /// <summary>
+        /// Whether this relationship is filtered out by query filter.
+        /// </summary>
+        public bool IsQueryFiltered
+        {
+            get => _isQueryFiltered;
+            set { _isQueryFiltered = value; NotifyOfPropertyChange(); }
         }
 
         #endregion
