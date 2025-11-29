@@ -9,7 +9,9 @@
              xmlns:ap="clr-namespace:DaxStudio.UI.AttachedProperties"
              mc:Ignorable="d" 
              d:DesignHeight="450" d:DesignWidth="800"
-             Background="{DynamicResource Theme.Brush.Content.Back}">
+             Background="{DynamicResource Theme.Brush.Content.Back}"
+             Focusable="True"
+             PreviewKeyDown="UserControl_PreviewKeyDown">
     
     <UserControl.Resources>
         <ResourceDictionary>
@@ -63,6 +65,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         
                         <!-- Table Header -->
@@ -73,6 +76,17 @@
                                 MouseLeftButtonDown="TableHeader_MouseLeftButtonDown"
                                 Cursor="Hand"
                                 ToolTip="{Binding Tooltip}">
+                            <Border.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Copy Table Name" Click="CopyTableName_Click"/>
+                                    <MenuItem Header="Copy DAX Reference" Click="CopyTableDaxName_Click"/>
+                                    <Separator/>
+                                    <MenuItem Header="Jump to Metadata Pane" Click="JumpToMetadata_Click"/>
+                                    <Separator/>
+                                    <MenuItem Header="Collapse" Click="CollapseTable_Click"/>
+                                    <MenuItem Header="Expand" Click="ExpandTable_Click"/>
+                                </ContextMenu>
+                            </Border.ContextMenu>
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
@@ -232,7 +246,13 @@
                                 <ItemsControl ItemsSource="{Binding Columns}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate DataType="{x:Type vm:ModelDiagramColumnViewModel}">
-                                            <Border ToolTip="{Binding Tooltip}">
+                                            <Border ToolTip="{Binding Tooltip}" Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ItemsControl}}">
+                                                <Border.ContextMenu>
+                                                    <ContextMenu>
+                                                        <MenuItem Header="Copy Column Name" Click="CopyColumnName_Click"/>
+                                                        <MenuItem Header="Copy DAX Reference" Click="CopyColumnDaxName_Click"/>
+                                                    </ContextMenu>
+                                                </Border.ContextMenu>
                                                 <Border.Style>
                                                     <Style TargetType="Border" BasedOn="{StaticResource ColumnItemStyle}">
                                                         <Setter Property="Opacity" Value="1"/>
@@ -296,6 +316,26 @@
                                 </ItemsControl>
                             </ScrollViewer>
                         </Border>
+                        
+                        <!-- Group Indicator (shown when table has a group) -->
+                        <Border Grid.Row="3"
+                                Height="4"
+                                CornerRadius="0,0,4,4"
+                                Background="{Binding GroupColor}">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasGroup}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <Border.ToolTip>
+                                <TextBlock Text="{Binding Group, StringFormat='Group: {0}'}"/>
+                            </Border.ToolTip>
+                        </Border>
                     </Grid>
                 </Border>
                 
@@ -333,7 +373,7 @@
 
             <!-- Relationship Line Template -->
             <DataTemplate x:Key="RelationshipLineTemplate" DataType="{x:Type vm:ModelDiagramRelationshipViewModel}">
-                <Canvas>
+                <Canvas Visibility="{Binding HasValidPositions, Converter={StaticResource BoolToVisibilityConverter}}">
                     <Canvas.Style>
                         <Style TargetType="Canvas">
                             <Setter Property="Opacity" Value="1"/>
@@ -345,44 +385,95 @@
                         </Style>
                     </Canvas.Style>
                     
-                    <!-- Relationship Path -->
+                    <!-- Relationship Path (main line) -->
                     <Path Data="{Binding PathData}"
                           StrokeThickness="2"
                           ToolTip="{Binding Tooltip}">
                         <Path.Style>
                             <Style TargetType="Path">
-                                <Setter Property="Stroke" Value="#888888"/>
+                                <Setter Property="Stroke" Value="#666666"/>
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
                                         <Setter Property="Stroke" Value="#FF5722"/>
                                         <Setter Property="StrokeThickness" Value="3"/>
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding IsActive}" Value="False">
-                                        <Setter Property="Stroke" Value="#CCCCCC"/>
+                                        <Setter Property="Stroke" Value="#999999"/>
                                         <Setter Property="StrokeDashArray" Value="4,2"/>
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding IsManyToMany}" Value="True">
                                         <Setter Property="Stroke" Value="#E91E63"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding IsBidirectional}" Value="True">
-                                        <Setter Property="Stroke" Value="#4CAF50"/>
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </Path.Style>
                     </Path>
                     
-                    <!-- Cardinality Label -->
+                    <!-- "From" Cardinality (1 or *) - positioned near start of line -->
+                    <Border Canvas.Left="{Binding FromCardinalityX}"
+                            Canvas.Top="{Binding FromCardinalityY}"
+                            Background="{DynamicResource Theme.Brush.Content.Back}"
+                            CornerRadius="3"
+                            Padding="3,1"
+                            BorderThickness="1"
+                            BorderBrush="#888888">
+                        <TextBlock Text="{Binding FromCardinality}"
+                                   FontSize="10"
+                                   FontWeight="Bold"
+                                   Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                                   ToolTip="{Binding FromCardinalityTooltip}"/>
+                    </Border>
+                    
+                    <!-- "To" Cardinality (1 or *) - positioned near end of line -->
+                    <Border Canvas.Left="{Binding ToCardinalityX}"
+                            Canvas.Top="{Binding ToCardinalityY}"
+                            Background="{DynamicResource Theme.Brush.Content.Back}"
+                            CornerRadius="3"
+                            Padding="3,1"
+                            BorderThickness="1"
+                            BorderBrush="#888888">
+                        <TextBlock Text="{Binding ToCardinality}"
+                                   FontSize="10"
+                                   FontWeight="Bold"
+                                   Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                                   ToolTip="{Binding ToCardinalityTooltip}"/>
+                    </Border>
+                    
+                    <!-- Center indicator panel (for BiDi, M:M, Inactive labels) -->
                     <Border Canvas.Left="{Binding LabelX}"
                             Canvas.Top="{Binding LabelY}"
+                            Margin="-20,-10,0,0"
                             Background="{DynamicResource Theme.Brush.Content.Back}"
-                            CornerRadius="4"
-                            Padding="4,2"
-                            Margin="-15,-10,0,0">
-                        <TextBlock Text="{Binding CardinalityText}"
-                                   FontSize="10"
-                                   FontWeight="SemiBold"
-                                   Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
+                            CornerRadius="3"
+                            Padding="2,1"
+                            BorderThickness="1"
+                            BorderBrush="#888888"
+                            Visibility="{Binding HasCenterIndicators, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <StackPanel Orientation="Horizontal">
+                            <!-- Bi-directional indicator -->
+                            <TextBlock Text="BiDi"
+                                       FontSize="9"
+                                       FontWeight="SemiBold"
+                                       Foreground="#4CAF50"
+                                       Margin="0,0,2,0"
+                                       ToolTip="Bi-directional cross-filtering"
+                                       Visibility="{Binding IsBidirectional, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                            <!-- Many-to-Many indicator -->
+                            <TextBlock Text="M:M"
+                                       FontSize="9"
+                                       FontWeight="SemiBold"
+                                       Foreground="#E91E63"
+                                       Margin="0,0,2,0"
+                                       ToolTip="Many-to-Many relationship"
+                                       Visibility="{Binding IsManyToMany, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                            <!-- Inactive indicator -->
+                            <TextBlock Text="Inactive"
+                                       FontSize="9"
+                                       FontStyle="Italic"
+                                       Foreground="#999999"
+                                       ToolTip="This relationship is inactive"
+                                       Visibility="{Binding IsInactive, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                        </StackPanel>
                     </Border>
                 </Canvas>
             </DataTemplate>
@@ -437,22 +528,20 @@
                 
                 <!-- Toggle Buttons -->
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="16,0,0,0">
-                    <Button Content="Collapse All" 
-                            cal:Message.Attach="CollapseAll"
-                            Margin="0,0,8,0"
-                            Padding="8,2"/>
-                    <Button Content="Expand All" 
-                            cal:Message.Attach="ExpandAll"
-                            Margin="0,0,8,0"
-                            Padding="8,2"/>
-                    <ToggleButton Content="Show Data Types"
-                                  IsChecked="{Binding ShowDataTypes}"
-                                  Margin="0,0,8,0"
-                                  Padding="8,2"/>
                     <ToggleButton Content="Show Hidden"
                                   IsChecked="{Binding ShowHiddenObjects}"
                                   Margin="0,0,8,0"
                                   Padding="8,2"/>
+                    <ToggleButton Content="Snap to Grid"
+                                  IsChecked="{Binding SnapToGrid}"
+                                  Margin="0,0,8,0"
+                                  Padding="8,2"
+                                  ToolTip="Snap tables to grid when dragging"/>
+                    <ToggleButton Content="Mini-Map"
+                                  IsChecked="{Binding ShowMiniMap}"
+                                  Margin="0,0,8,0"
+                                  Padding="8,2"
+                                  ToolTip="Show overview mini-map"/>
                 </StackPanel>
                 
                 <!-- Zoom Controls -->
@@ -489,10 +578,49 @@
                       VerticalScrollBarVisibility="Auto"
                       PreviewMouseWheel="ScrollViewer_PreviewMouseWheel"
                       Background="{DynamicResource Theme.Brush.Content.Back}">
-            <Grid Width="{Binding CanvasWidth}" Height="{Binding CanvasHeight}">
+            <Grid MinWidth="{Binding ActualWidth, ElementName=MainScrollViewer}"
+                  MinHeight="{Binding ActualHeight, ElementName=MainScrollViewer}"
+                  Width="{Binding CanvasWidth}" 
+                  Height="{Binding CanvasHeight}"
+                  Background="{DynamicResource Theme.Brush.Content.Back}">
                 <Grid.LayoutTransform>
                     <ScaleTransform x:Name="CanvasScaleTransform" ScaleX="1" ScaleY="1"/>
                 </Grid.LayoutTransform>
+                
+                <!-- Context Menu for Canvas -->
+                <Grid.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Expand All Tables" cal:Message.Attach="ExpandAll"/>
+                        <MenuItem Header="Collapse All Tables" cal:Message.Attach="CollapseAll"/>
+                        <Separator/>
+                        <MenuItem Header="Select All" cal:Message.Attach="SelectAllTables" InputGestureText="Ctrl+A"/>
+                        <MenuItem Header="Clear Selection" cal:Message.Attach="ClearSelection" InputGestureText="Esc"/>
+                        <Separator/>
+                        <MenuItem Header="Layout">
+                            <MenuItem Header="Auto Arrange" cal:Message.Attach="AutoArrange" ToolTip="Re-arrange tables using automatic layout"/>
+                            <MenuItem Header="Arrange by Group" cal:Message.Attach="ArrangeByGroup" ToolTip="Arrange tables in rows by their group"/>
+                            <Separator/>
+                            <MenuItem Header="Clear Saved Layout" cal:Message.Attach="ClearSavedLayout" ToolTip="Remove saved layout and use auto-arrange"/>
+                        </MenuItem>
+                        <MenuItem Header="Grouping">
+                            <MenuItem Header="Auto-Group by Prefix" cal:Message.Attach="AutoGroupByPrefix" ToolTip="Automatically group tables by name prefix (e.g., Dim_, Fact_)"/>
+                            <MenuItem Header="Clear All Groups" cal:Message.Attach="ClearAllGroups"/>
+                        </MenuItem>
+                        <Separator/>
+                        <MenuItem Header="Zoom">
+                            <MenuItem Header="Zoom to Fit" cal:Message.Attach="ZoomToFit"/>
+                            <MenuItem Header="Reset to 100%" cal:Message.Attach="ResetZoom"/>
+                            <Separator/>
+                            <MenuItem Header="50%" cal:Message.Attach="SetZoom(0.5)"/>
+                            <MenuItem Header="75%" cal:Message.Attach="SetZoom(0.75)"/>
+                            <MenuItem Header="100%" cal:Message.Attach="SetZoom(1.0)"/>
+                            <MenuItem Header="125%" cal:Message.Attach="SetZoom(1.25)"/>
+                            <MenuItem Header="150%" cal:Message.Attach="SetZoom(1.5)"/>
+                        </MenuItem>
+                        <Separator/>
+                        <MenuItem Header="Export as Image..." cal:Message.Attach="ExportToImage"/>
+                    </ContextMenu>
+                </Grid.ContextMenu>
                 
                 <!-- Relationship Lines (drawn first, behind tables) -->
                 <ItemsControl ItemsSource="{Binding Relationships}"
@@ -520,8 +648,82 @@
                         </Style>
                     </ItemsControl.ItemContainerStyle>
                 </ItemsControl>
+                
+                <!-- Selection Rectangle (for drag-select) -->
+                <Canvas x:Name="SelectionCanvas" IsHitTestVisible="False">
+                    <Rectangle x:Name="SelectionRect" 
+                               Fill="#202196F3" 
+                               Stroke="#2196F3" 
+                               StrokeThickness="1"
+                               Visibility="Collapsed"/>
+                </Canvas>
             </Grid>
         </ScrollViewer>
+        
+        <!-- Mini-Map Panel (overlay in bottom-right corner) -->
+        <Border Grid.Row="1"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="10"
+                Width="200" Height="150"
+                Background="{DynamicResource Theme.Brush.Content.Back}"
+                BorderBrush="{DynamicResource Theme.Brush.MenuBar.Border}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Visibility="{Binding ShowMiniMap, Converter={StaticResource BoolToVisibilityConverter}}">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="8" ShadowDepth="2" Opacity="0.3"/>
+            </Border.Effect>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <Border Grid.Row="0" 
+                        Background="{DynamicResource Theme.Brush.MenuBar.Back}"
+                        Padding="4,2">
+                    <TextBlock Text="Overview" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
+                </Border>
+                <Viewbox Grid.Row="1" Stretch="Uniform" Margin="4">
+                    <Canvas x:Name="MiniMapCanvas"
+                            Width="{Binding CanvasWidth}"
+                            Height="{Binding CanvasHeight}"
+                            Background="Transparent"
+                            ClipToBounds="True"
+                            MouseLeftButtonDown="MiniMap_MouseLeftButtonDown">
+                        <!-- Mini representations of tables -->
+                        <ItemsControl ItemsSource="{Binding Tables}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <Canvas/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemContainerStyle>
+                                <Style TargetType="ContentPresenter">
+                                    <Setter Property="Canvas.Left" Value="{Binding X}"/>
+                                    <Setter Property="Canvas.Top" Value="{Binding Y}"/>
+                                </Style>
+                            </ItemsControl.ItemContainerStyle>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Rectangle Width="{Binding Width}" 
+                                               Height="{Binding Height}"
+                                               Fill="{Binding HeaderColor}"
+                                               Opacity="0.7"/>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        
+                        <!-- Viewport indicator -->
+                        <Rectangle x:Name="MiniMapViewport"
+                                   Stroke="#FF5722"
+                                   StrokeThickness="2"
+                                   Fill="#10FF5722"/>
+                    </Canvas>
+                </Viewbox>
+            </Grid>
+        </Border>
         
         <!-- Status Bar -->
         <Border Grid.Row="2" 
@@ -542,26 +744,43 @@
                 
                 <!-- Legend -->
                 <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <!-- Table Types -->
                     <Border Background="#2196F3" Width="12" Height="12" CornerRadius="2" Margin="8,0,4,0"/>
-                    <TextBlock Text="Table" VerticalAlignment="Center" Margin="0,0,12,0" FontSize="10"
+                    <TextBlock Text="Table" VerticalAlignment="Center" Margin="0,0,10,0" FontSize="10"
                                Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
                     
                     <Border Background="#4CAF50" Width="12" Height="12" CornerRadius="2" Margin="0,0,4,0"/>
-                    <TextBlock Text="Date Table" VerticalAlignment="Center" Margin="0,0,12,0" FontSize="10"
+                    <TextBlock Text="Date" VerticalAlignment="Center" Margin="0,0,10,0" FontSize="10"
                                Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
                     
                     <Border Background="#9C27B0" Width="12" Height="12" CornerRadius="2" Margin="0,0,4,0"/>
-                    <TextBlock Text="Measure Table" VerticalAlignment="Center" Margin="0,0,12,0" FontSize="10"
+                    <TextBlock Text="Measures" VerticalAlignment="Center" Margin="0,0,16,0" FontSize="10"
                                Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
                     
-                    <Border Background="#888888" Width="20" Height="2" Margin="0,0,4,0" VerticalAlignment="Center"/>
-                    <TextBlock Text="Active" VerticalAlignment="Center" Margin="0,0,12,0" FontSize="10"
+                    <!-- Separator -->
+                    <Border Width="1" Height="14" Background="#888888" Margin="0,0,16,0"/>
+                    
+                    <!-- Relationship Types -->
+                    <TextBlock Text="▶" FontSize="10" Foreground="#666666" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                    <TextBlock Text="Filter" VerticalAlignment="Center" Margin="0,0,10,0" FontSize="10"
                                Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
                     
-                    <Border Background="#CCCCCC" Width="20" Height="2" Margin="0,0,4,0" VerticalAlignment="Center">
-                        <Border.Effect>
-                            <BlurEffect Radius="1"/>
-                        </Border.Effect>
+                    <TextBlock Text="↔" FontSize="12" FontWeight="Bold" Foreground="#4CAF50" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                    <TextBlock Text="Bi-Di" VerticalAlignment="Center" Margin="0,0,10,0" FontSize="10"
+                               Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
+                    
+                    <TextBlock Text="⚠" FontSize="10" Foreground="#E91E63" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                    <TextBlock Text="M:M" VerticalAlignment="Center" Margin="0,0,10,0" FontSize="10"
+                               Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
+                    
+                    <Border Width="20" Height="2" Margin="0,0,4,0" VerticalAlignment="Center">
+                        <Border.Background>
+                            <VisualBrush TileMode="Tile" Viewport="0,0,4,4" ViewportUnits="Absolute">
+                                <VisualBrush.Visual>
+                                    <Rectangle Width="2" Height="2" Fill="#AAAAAA"/>
+                                </VisualBrush.Visual>
+                            </VisualBrush>
+                        </Border.Background>
                     </Border>
                     <TextBlock Text="Inactive" VerticalAlignment="Center" FontSize="10"
                                Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>

@@ -3,11 +3,14 @@ using Caliburn.Micro;
 using DaxStudio.UI.Events;
 using DaxStudio.UI.Interfaces;
 using DaxStudio.UI.Model;
+using Newtonsoft.Json;
 using Serilog;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
+using System.IO;
 using System.Linq;
+using System.Windows;
 using System.Windows.Media;
 
 namespace DaxStudio.UI.ViewModels
@@ -23,6 +26,15 @@ namespace DaxStudio.UI.ViewModels
     {
         private readonly IEventAggregator _eventAggregator;
         private ADOTabularModel _model;
+        private string _currentModelKey;
+
+        /// <summary>
+        /// Path to the layout cache file.
+        /// </summary>
+        private static string LayoutCacheFilePath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "DaxStudio",
+            "ModelDiagramLayouts.json");
 
         [ImportingConstructor]
         public ModelDiagramViewModel(IEventAggregator eventAggregator)
@@ -236,6 +248,50 @@ namespace DaxStudio.UI.ViewModels
             }
         }
 
+        private bool _snapToGrid = false;
+        /// <summary>
+        /// Whether to snap table positions to a grid when dragging.
+        /// </summary>
+        public bool SnapToGrid
+        {
+            get => _snapToGrid;
+            set { _snapToGrid = value; NotifyOfPropertyChange(); }
+        }
+
+        /// <summary>
+        /// The grid size for snapping (in pixels).
+        /// </summary>
+        public double GridSize => 20;
+
+        /// <summary>
+        /// Snaps a value to the grid if snap is enabled.
+        /// </summary>
+        public double SnapToGridValue(double value)
+        {
+            if (!SnapToGrid) return value;
+            return Math.Round(value / GridSize) * GridSize;
+        }
+
+        private bool _showMiniMap = false;
+        /// <summary>
+        /// Whether to show the mini-map overview panel.
+        /// </summary>
+        public bool ShowMiniMap
+        {
+            get => _showMiniMap;
+            set { _showMiniMap = value; NotifyOfPropertyChange(); }
+        }
+
+        /// <summary>
+        /// Collection of selected tables for multi-selection.
+        /// </summary>
+        public BindableCollection<ModelDiagramTableViewModel> SelectedTables { get; } = new BindableCollection<ModelDiagramTableViewModel>();
+
+        /// <summary>
+        /// Whether multiple tables are currently selected.
+        /// </summary>
+        public bool HasMultipleSelection => SelectedTables.Count > 1;
+
         private ModelDiagramTableViewModel _selectedTable;
         /// <summary>
         /// The currently selected table.
@@ -280,6 +336,73 @@ namespace DaxStudio.UI.ViewModels
             }
         }
 
+        /// <summary>
+        /// Called when mouse enters a table. Highlights related tables and dims others.
+        /// </summary>
+        public void OnTableMouseEnter(ModelDiagramTableViewModel hoveredTable)
+        {
+            if (hoveredTable == null) return;
+
+            hoveredTable.IsHovered = true;
+
+            // Find all tables connected to the hovered table
+            var connectedTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { hoveredTable.TableName };
+            foreach (var rel in Relationships)
+            {
+                if (rel.FromTable == hoveredTable.TableName)
+                    connectedTables.Add(rel.ToTable);
+                else if (rel.ToTable == hoveredTable.TableName)
+                    connectedTables.Add(rel.FromTable);
+            }
+
+            // Dim unconnected tables and relationships
+            foreach (var table in Tables)
+            {
+                table.IsDimmed = !connectedTables.Contains(table.TableName);
+            }
+
+            foreach (var rel in Relationships)
+            {
+                var isConnected = rel.FromTable == hoveredTable.TableName || rel.ToTable == hoveredTable.TableName;
+                rel.IsHighlighted = isConnected;
+                rel.IsDimmed = !isConnected;
+            }
+        }
+
+        /// <summary>
+        /// Called when mouse leaves a table. Restores normal highlighting.
+        /// </summary>
+        public void OnTableMouseLeave(ModelDiagramTableViewModel hoveredTable)
+        {
+            if (hoveredTable == null) return;
+
+            hoveredTable.IsHovered = false;
+
+            // Restore all tables to normal (unless there's a selection)
+            if (_selectedTable == null)
+            {
+                foreach (var table in Tables)
+                {
+                    table.IsDimmed = false;
+                }
+
+                foreach (var rel in Relationships)
+                {
+                    rel.IsHighlighted = false;
+                    rel.IsDimmed = false;
+                }
+            }
+            else
+            {
+                // Restore selection-based highlighting
+                UpdateRelationshipHighlighting();
+                foreach (var table in Tables)
+                {
+                    table.IsDimmed = false; // Tables don't dim on selection, only relationships
+                }
+            }
+        }
+
         #endregion
 
         #region Methods
@@ -296,6 +419,7 @@ namespace DaxStudio.UI.ViewModels
             try
             {
                 _model = model;
+                _currentModelKey = GenerateModelKey(model);
                 Tables.Clear();
                 Relationships.Clear();
 
@@ -331,8 +455,11 @@ namespace DaxStudio.UI.ViewModels
                     }
                 }
 
-                // Layout the diagram
-                LayoutDiagram();
+                // Try to load saved layout, otherwise use auto-layout
+                if (!TryLoadSavedLayout())
+                {
+                    LayoutDiagram();
+                }
 
                 NotifyOfPropertyChange(nameof(SummaryText));
                 NotifyOfPropertyChange(nameof(HasData));
@@ -349,8 +476,22 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
+        /// Generates a unique key for the model based on server and database.
+        /// </summary>
+        private string GenerateModelKey(ADOTabularModel model)
+        {
+            // Create a key from database name and table count/names hash
+            // This identifies the same model even across different connections
+            var tableNames = string.Join("|", model.Tables.OrderBy(t => t.Caption).Select(t => t.Caption));
+            var hash = tableNames.GetHashCode().ToString("X8");
+            return $"{model.Database?.Name ?? "Unknown"}_{hash}";
+        }
+
+        /// <summary>
         /// Layouts the diagram using a simple grid-based algorithm.
         /// Tables connected by relationships are placed closer together.
+        /// Fact tables (many relationships, on the "many" side) go at the bottom.
+        /// Dimension tables (fewer relationships, on the "one" side) go at the top.
         /// </summary>
         private void LayoutDiagram()
         {
@@ -359,41 +500,48 @@ namespace DaxStudio.UI.ViewModels
             const double tableWidth = 200;
             const double tableHeight = 180;
             const double horizontalSpacing = 100;
-            const double verticalSpacing = 60;
-            const double padding = 150;  // Extra padding to allow room for dragging tables left
+            const double verticalSpacing = 80;
+            const double padding = 40;
 
-            // Build relationship map to understand connectivity
+            // Build relationship map and categorize tables
             var relationshipMap = BuildRelationshipMap();
+            var tableInfo = CategorizeTablesForLayout(relationshipMap);
 
-            // Find fact tables (tables with most relationships) vs dimension tables
-            var tablesByConnections = Tables
-                .OrderByDescending(t => relationshipMap.TryGetValue(t.TableName, out var connections) ? connections.Count : 0)
-                .ThenBy(t => t.TableName)
-                .ToList();
+            // Separate into tiers based on table role
+            var factTables = tableInfo.Where(t => t.Value.Role == TableRole.Fact).Select(t => t.Key).ToList();
+            var bridgeTables = tableInfo.Where(t => t.Value.Role == TableRole.Bridge).Select(t => t.Key).ToList();
+            var dimensionTables = tableInfo.Where(t => t.Value.Role == TableRole.Dimension).Select(t => t.Key).ToList();
+            var standaloneTables = tableInfo.Where(t => t.Value.Role == TableRole.Standalone).Select(t => t.Key).ToList();
 
-            // Choose layout based on table count
-            if (Tables.Count == 1)
+            // Layout in tiers: Dimensions at top, Bridge/other in middle, Facts at bottom
+            double currentY = padding;
+
+            // Tier 1: Dimension tables (top)
+            if (dimensionTables.Count > 0)
             {
-                // Single table - just center it
-                Tables[0].X = padding;
-                Tables[0].Y = padding;
-                Tables[0].Width = tableWidth;
-                Tables[0].Height = tableHeight;
+                currentY = LayoutTier(dimensionTables, currentY, tableWidth, tableHeight, horizontalSpacing, padding);
+                currentY += verticalSpacing;
             }
-            else if (Tables.Count == 2)
+
+            // Tier 2: Bridge tables (middle)
+            if (bridgeTables.Count > 0)
             {
-                // Two tables - place side by side
-                LayoutHorizontal(tablesByConnections, tableWidth, tableHeight, horizontalSpacing, padding);
+                currentY = LayoutTier(bridgeTables, currentY, tableWidth, tableHeight, horizontalSpacing, padding);
+                currentY += verticalSpacing;
             }
-            else if (Tables.Count <= 4)
+
+            // Tier 3: Fact tables (bottom center)
+            if (factTables.Count > 0)
             {
-                // 3-4 tables - use grid layout
-                LayoutGrid(tablesByConnections, relationshipMap, tableWidth, tableHeight, horizontalSpacing, verticalSpacing, padding);
+                currentY = LayoutTierCentered(factTables, currentY, tableWidth, tableHeight, horizontalSpacing, padding, 
+                    Math.Max(dimensionTables.Count, bridgeTables.Count));
+                currentY += verticalSpacing;
             }
-            else
+
+            // Tier 4: Standalone tables (bottom, if any)
+            if (standaloneTables.Count > 0)
             {
-                // 5+ tables - use star layout with most connected table in center
-                LayoutStar(tablesByConnections, relationshipMap, tableWidth, tableHeight, horizontalSpacing, verticalSpacing, padding);
+                currentY = LayoutTier(standaloneTables, currentY, tableWidth, tableHeight, horizontalSpacing, padding);
             }
 
             // Calculate canvas size to fit all tables
@@ -407,6 +555,117 @@ namespace DaxStudio.UI.ViewModels
             {
                 rel.UpdatePath();
             }
+        }
+
+        /// <summary>
+        /// Categorizes tables based on their relationship patterns.
+        /// </summary>
+        private Dictionary<ModelDiagramTableViewModel, TableLayoutInfo> CategorizeTablesForLayout(
+            Dictionary<string, HashSet<string>> relationshipMap)
+        {
+            var result = new Dictionary<ModelDiagramTableViewModel, TableLayoutInfo>();
+
+            foreach (var table in Tables)
+            {
+                var info = new TableLayoutInfo
+                {
+                    ConnectionCount = relationshipMap.TryGetValue(table.TableName, out var connections) ? connections.Count : 0
+                };
+
+                // Count how many times this table is on the "many" side vs "one" side
+                int manySideCount = 0;
+                int oneSideCount = 0;
+
+                foreach (var rel in Relationships)
+                {
+                    if (rel.FromTable == table.TableName)
+                    {
+                        // This table is on the "From" side
+                        if (rel.FromCardinality == "*") manySideCount++;
+                        else oneSideCount++;
+                    }
+                    else if (rel.ToTable == table.TableName)
+                    {
+                        // This table is on the "To" side
+                        if (rel.ToCardinality == "*") manySideCount++;
+                        else oneSideCount++;
+                    }
+                }
+
+                // Determine role based on relationship patterns
+                if (info.ConnectionCount == 0)
+                {
+                    info.Role = TableRole.Standalone;
+                }
+                else if (manySideCount > 0 && manySideCount >= oneSideCount)
+                {
+                    // Primarily on the "many" side = Fact table
+                    info.Role = TableRole.Fact;
+                }
+                else if (info.ConnectionCount >= 3 && manySideCount > 0)
+                {
+                    // Many connections with some "many" sides = Bridge table
+                    info.Role = TableRole.Bridge;
+                }
+                else
+                {
+                    // Primarily on the "one" side = Dimension table
+                    info.Role = TableRole.Dimension;
+                }
+
+                result[table] = info;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Layouts a tier of tables in a row.
+        /// </summary>
+        private double LayoutTier(List<ModelDiagramTableViewModel> tables, double startY,
+            double tableWidth, double tableHeight, double hSpacing, double padding)
+        {
+            if (tables.Count == 0) return startY;
+
+            double x = padding;
+            double maxHeight = tableHeight;
+
+            foreach (var table in tables.OrderBy(t => t.TableName))
+            {
+                table.X = x;
+                table.Y = startY;
+                table.Width = tableWidth;
+                table.Height = tableHeight;
+                x += tableWidth + hSpacing;
+            }
+
+            return startY + maxHeight;
+        }
+
+        /// <summary>
+        /// Layouts a tier of tables centered relative to the widest tier.
+        /// </summary>
+        private double LayoutTierCentered(List<ModelDiagramTableViewModel> tables, double startY,
+            double tableWidth, double tableHeight, double hSpacing, double padding, int maxColsReference)
+        {
+            if (tables.Count == 0) return startY;
+
+            // Calculate offset to center this tier
+            double maxWidth = maxColsReference * (tableWidth + hSpacing) - hSpacing;
+            double thisWidth = tables.Count * (tableWidth + hSpacing) - hSpacing;
+            double offsetX = padding + Math.Max(0, (maxWidth - thisWidth) / 2);
+
+            double x = offsetX;
+            foreach (var table in tables.OrderBy(t => t.TableName))
+            {
+                table.X = x;
+                table.Y = startY;
+                table.Width = tableWidth;
+                table.Height = tableHeight;
+                x += tableWidth + hSpacing;
+            }
+
+            return startY + tableHeight;
         }
 
         /// <summary>
@@ -428,118 +687,6 @@ namespace DaxStudio.UI.ViewModels
             }
 
             return map;
-        }
-
-        /// <summary>
-        /// Layout tables horizontally in a single row (for small diagrams).
-        /// </summary>
-        private void LayoutHorizontal(List<ModelDiagramTableViewModel> tables, double tableWidth, double tableHeight, double spacing, double padding)
-        {
-            double x = padding;
-            foreach (var table in tables)
-            {
-                table.X = x;
-                table.Y = padding;
-                table.Width = tableWidth;
-                table.Height = tableHeight;
-                x += tableWidth + spacing;
-            }
-        }
-
-        /// <summary>
-        /// Layout 3-4 tables in a grid pattern based on relationships.
-        /// </summary>
-        private void LayoutGrid(List<ModelDiagramTableViewModel> tables, Dictionary<string, HashSet<string>> relationshipMap,
-            double tableWidth, double tableHeight, double hSpacing, double vSpacing, double padding)
-        {
-            if (tables.Count == 3)
-            {
-                // Triangle layout
-                var factTable = tables[0];
-                var dim1 = tables[1];
-                var dim2 = tables[2];
-
-                double totalWidth = 2 * tableWidth + hSpacing;
-                double startX = padding;
-
-                // Top row - dimensions
-                dim1.X = startX;
-                dim1.Y = padding;
-                dim1.Width = tableWidth;
-                dim1.Height = tableHeight;
-
-                dim2.X = startX + tableWidth + hSpacing;
-                dim2.Y = padding;
-                dim2.Width = tableWidth;
-                dim2.Height = tableHeight;
-
-                // Bottom row - fact table centered
-                factTable.X = startX + (totalWidth - tableWidth) / 2;
-                factTable.Y = padding + tableHeight + vSpacing;
-                factTable.Width = tableWidth;
-                factTable.Height = tableHeight;
-            }
-            else if (tables.Count == 4)
-            {
-                // 2x2 grid layout
-                double startX = padding;
-                double startY = padding;
-
-                tables[0].X = startX;
-                tables[0].Y = startY;
-                tables[0].Width = tableWidth;
-                tables[0].Height = tableHeight;
-
-                tables[1].X = startX + tableWidth + hSpacing;
-                tables[1].Y = startY;
-                tables[1].Width = tableWidth;
-                tables[1].Height = tableHeight;
-
-                tables[2].X = startX;
-                tables[2].Y = startY + tableHeight + vSpacing;
-                tables[2].Width = tableWidth;
-                tables[2].Height = tableHeight;
-
-                tables[3].X = startX + tableWidth + hSpacing;
-                tables[3].Y = startY + tableHeight + vSpacing;
-                tables[3].Width = tableWidth;
-                tables[3].Height = tableHeight;
-            }
-        }
-
-        /// <summary>
-        /// Layout with most connected table in center, others around it.
-        /// </summary>
-        private void LayoutStar(List<ModelDiagramTableViewModel> tables, Dictionary<string, HashSet<string>> relationshipMap,
-            double tableWidth, double tableHeight, double hSpacing, double vSpacing, double padding)
-        {
-            // Calculate grid dimensions for a balanced layout
-            int cols = (int)Math.Ceiling(Math.Sqrt(tables.Count));
-            int rows = (int)Math.Ceiling((double)tables.Count / cols);
-
-            double x = padding;
-            double y = padding;
-            int col = 0;
-
-            foreach (var table in tables)
-            {
-                table.X = x;
-                table.Y = y;
-                table.Width = tableWidth;
-                table.Height = tableHeight;
-
-                col++;
-                if (col >= cols)
-                {
-                    col = 0;
-                    x = padding;
-                    y += tableHeight + vSpacing;
-                }
-                else
-                {
-                    x += tableWidth + hSpacing;
-                }
-            }
         }
 
         /// <summary>
@@ -586,6 +733,632 @@ namespace DaxStudio.UI.ViewModels
         public void ResetZoom()
         {
             Scale = 1.0;
+        }
+
+        /// <summary>
+        /// Sets zoom to a specific level.
+        /// </summary>
+        public void SetZoom(double scale)
+        {
+            Scale = Math.Max(0.1, Math.Min(2.0, scale));
+        }
+
+        /// <summary>
+        /// Auto-arranges tables in a grid layout.
+        /// </summary>
+        public void AutoArrange()
+        {
+            LayoutDiagram();
+            RefreshLayout();
+            SaveCurrentLayout();
+        }
+
+        /// <summary>
+        /// Clears the saved layout for this model and re-applies auto-arrange.
+        /// </summary>
+        public void ClearSavedLayout()
+        {
+            if (string.IsNullOrEmpty(_currentModelKey)) return;
+
+            try
+            {
+                var layouts = LoadLayoutCache();
+                if (layouts.Remove(_currentModelKey))
+                {
+                    // Save the updated cache
+                    var directory = Path.GetDirectoryName(LayoutCacheFilePath);
+                    if (!Directory.Exists(directory))
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
+                    var json = JsonConvert.SerializeObject(layouts, Formatting.None);
+                    File.WriteAllText(LayoutCacheFilePath, json);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to clear saved layout");
+            }
+
+            // Re-apply auto layout
+            LayoutDiagram();
+            RefreshLayout();
+        }
+
+        /// <summary>
+        /// Saves the current table positions after a drag operation.
+        /// Called from the view when tables are moved.
+        /// </summary>
+        public void SaveLayoutAfterDrag()
+        {
+            SaveCurrentLayout();
+        }
+
+        #region Copy Operations
+
+        /// <summary>
+        /// Copies the table name to clipboard.
+        /// </summary>
+        public void CopyTableName(ModelDiagramTableViewModel table)
+        {
+            if (table == null) return;
+            try
+            {
+                ClipboardManager.SetText(table.TableName);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to copy table name to clipboard");
+            }
+        }
+
+        /// <summary>
+        /// Copies the table DAX reference to clipboard (e.g., 'TableName').
+        /// </summary>
+        public void CopyTableDaxName(ModelDiagramTableViewModel table)
+        {
+            if (table == null) return;
+            try
+            {
+                ClipboardManager.SetText($"'{table.TableName}'");
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to copy table DAX name to clipboard");
+            }
+        }
+
+        /// <summary>
+        /// Copies the column name to clipboard.
+        /// </summary>
+        public void CopyColumnName(ModelDiagramColumnViewModel column)
+        {
+            if (column == null) return;
+            try
+            {
+                ClipboardManager.SetText(column.ColumnName);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to copy column name to clipboard");
+            }
+        }
+
+        /// <summary>
+        /// Copies the column DAX reference to clipboard (e.g., 'TableName'[ColumnName]).
+        /// </summary>
+        public void CopyColumnDaxName(ModelDiagramColumnViewModel column, ModelDiagramTableViewModel table)
+        {
+            if (column == null || table == null) return;
+            try
+            {
+                var daxName = column.IsMeasure
+                    ? $"[{column.ColumnName}]"
+                    : $"'{table.TableName}'[{column.ColumnName}]";
+                ClipboardManager.SetText(daxName);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to copy column DAX name to clipboard");
+            }
+        }
+
+        #endregion
+
+        #region Multi-Selection Operations
+
+        /// <summary>
+        /// Toggles selection of a table (for Ctrl+click multi-select).
+        /// </summary>
+        public void ToggleTableSelection(ModelDiagramTableViewModel table)
+        {
+            if (table == null) return;
+
+            if (SelectedTables.Contains(table))
+            {
+                SelectedTables.Remove(table);
+                table.IsSelected = false;
+            }
+            else
+            {
+                SelectedTables.Add(table);
+                table.IsSelected = true;
+            }
+            NotifyOfPropertyChange(nameof(HasMultipleSelection));
+        }
+
+        /// <summary>
+        /// Selects a single table, clearing any multi-selection.
+        /// </summary>
+        public void SelectSingleTable(ModelDiagramTableViewModel table)
+        {
+            ClearSelection();
+            if (table != null)
+            {
+                SelectedTables.Add(table);
+                table.IsSelected = true;
+                _selectedTable = table;
+                NotifyOfPropertyChange(nameof(SelectedTable));
+            }
+            NotifyOfPropertyChange(nameof(HasMultipleSelection));
+            UpdateRelationshipHighlighting();
+        }
+
+        /// <summary>
+        /// Clears all table selections.
+        /// </summary>
+        public void ClearSelection()
+        {
+            foreach (var table in SelectedTables)
+            {
+                table.IsSelected = false;
+            }
+            SelectedTables.Clear();
+            _selectedTable = null;
+            NotifyOfPropertyChange(nameof(SelectedTable));
+            NotifyOfPropertyChange(nameof(HasMultipleSelection));
+        }
+
+        /// <summary>
+        /// Selects all tables in the diagram.
+        /// </summary>
+        public void SelectAllTables()
+        {
+            ClearSelection();
+            foreach (var table in Tables)
+            {
+                SelectedTables.Add(table);
+                table.IsSelected = true;
+            }
+            NotifyOfPropertyChange(nameof(HasMultipleSelection));
+        }
+
+        /// <summary>
+        /// Selects all tables within a rectangle (for drag-select).
+        /// </summary>
+        public void SelectTablesInRect(double left, double top, double right, double bottom)
+        {
+            ClearSelection();
+            foreach (var table in Tables)
+            {
+                // Check if table overlaps with selection rectangle
+                if (table.X < right && table.X + table.Width > left &&
+                    table.Y < bottom && table.Y + table.Height > top)
+                {
+                    SelectedTables.Add(table);
+                    table.IsSelected = true;
+                }
+            }
+            if (SelectedTables.Count == 1)
+            {
+                _selectedTable = SelectedTables[0];
+                NotifyOfPropertyChange(nameof(SelectedTable));
+            }
+            NotifyOfPropertyChange(nameof(HasMultipleSelection));
+        }
+
+        /// <summary>
+        /// Moves all selected tables by the given delta.
+        /// </summary>
+        public void MoveSelectedTables(double deltaX, double deltaY)
+        {
+            foreach (var table in SelectedTables)
+            {
+                table.X = Math.Max(0, SnapToGridValue(table.X + deltaX));
+                table.Y = Math.Max(0, SnapToGridValue(table.Y + deltaY));
+            }
+            RefreshLayout();
+        }
+
+        #endregion
+
+        #region Grouping
+
+        /// <summary>
+        /// Available group names for tables.
+        /// </summary>
+        public BindableCollection<string> AvailableGroups { get; } = new BindableCollection<string>();
+
+        /// <summary>
+        /// Groups tables by their name prefix (schema-like grouping).
+        /// Tables named like "Dim_Customer" or "Dim.Customer" will be grouped as "Dim".
+        /// </summary>
+        public void AutoGroupByPrefix()
+        {
+            AvailableGroups.Clear();
+            var groups = new HashSet<string>();
+
+            foreach (var table in Tables)
+            {
+                var name = table.TableName;
+                var prefix = ExtractPrefix(name);
+                if (!string.IsNullOrEmpty(prefix))
+                {
+                    table.Group = prefix;
+                    groups.Add(prefix);
+                }
+                else
+                {
+                    table.Group = "Other";
+                    groups.Add("Other");
+                }
+            }
+
+            foreach (var group in groups.OrderBy(g => g))
+            {
+                AvailableGroups.Add(group);
+            }
+            NotifyOfPropertyChange(nameof(AvailableGroups));
+        }
+
+        /// <summary>
+        /// Extracts a prefix from a table name (e.g., "Dim" from "Dim_Customer").
+        /// </summary>
+        private string ExtractPrefix(string tableName)
+        {
+            // Try common separators
+            foreach (var sep in new[] { '_', '.', ' ' })
+            {
+                var idx = tableName.IndexOf(sep);
+                if (idx > 0 && idx < tableName.Length - 1)
+                {
+                    var prefix = tableName.Substring(0, idx);
+                    // Only use if it looks like a prefix (short, starts with letter)
+                    if (prefix.Length <= 10 && char.IsLetter(prefix[0]))
+                    {
+                        return prefix;
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Sets the group for all selected tables.
+        /// </summary>
+        public void SetGroupForSelectedTables(string groupName)
+        {
+            foreach (var table in SelectedTables)
+            {
+                table.Group = groupName;
+            }
+
+            if (!string.IsNullOrEmpty(groupName) && !AvailableGroups.Contains(groupName))
+            {
+                AvailableGroups.Add(groupName);
+            }
+        }
+
+        /// <summary>
+        /// Clears all table groups.
+        /// </summary>
+        public void ClearAllGroups()
+        {
+            foreach (var table in Tables)
+            {
+                table.Group = null;
+            }
+            AvailableGroups.Clear();
+        }
+
+        /// <summary>
+        /// Arranges tables into rows by their group.
+        /// </summary>
+        public void ArrangeByGroup()
+        {
+            if (!Tables.Any(t => !string.IsNullOrEmpty(t.Group))) return;
+
+            const double tableWidth = 200;
+            const double tableHeight = 180;
+            const double horizontalSpacing = 100;
+            const double verticalSpacing = 100;
+            const double groupSpacing = 50;
+            const double padding = 40;
+
+            var groupedTables = Tables
+                .GroupBy(t => t.Group ?? "Ungrouped")
+                .OrderBy(g => g.Key)
+                .ToList();
+
+            double currentY = padding;
+
+            foreach (var group in groupedTables)
+            {
+                var tablesInGroup = group.OrderBy(t => t.TableName).ToList();
+                double x = padding;
+
+                foreach (var table in tablesInGroup)
+                {
+                    table.X = x;
+                    table.Y = currentY;
+                    table.Width = tableWidth;
+                    table.Height = tableHeight;
+                    x += tableWidth + horizontalSpacing;
+                }
+
+                currentY += tableHeight + verticalSpacing + groupSpacing;
+            }
+
+            // Recalculate canvas size
+            RefreshLayout();
+            SaveCurrentLayout();
+        }
+
+        #endregion
+
+        #region Keyboard Navigation
+
+        /// <summary>
+        /// Navigates to the next/previous table using arrow keys.
+        /// </summary>
+        public void NavigateToTable(string direction)
+        {
+            if (Tables.Count == 0) return;
+
+            var current = _selectedTable ?? Tables.FirstOrDefault();
+            if (current == null) return;
+
+            ModelDiagramTableViewModel target = null;
+            double bestDistance = double.MaxValue;
+
+            foreach (var table in Tables)
+            {
+                if (table == current) continue;
+
+                double dx = table.CenterX - current.CenterX;
+                double dy = table.CenterY - current.CenterY;
+
+                bool isCandidate = false;
+                switch (direction.ToLower())
+                {
+                    case "left":
+                        isCandidate = dx < -10 && Math.Abs(dy) < Math.Abs(dx);
+                        break;
+                    case "right":
+                        isCandidate = dx > 10 && Math.Abs(dy) < Math.Abs(dx);
+                        break;
+                    case "up":
+                        isCandidate = dy < -10 && Math.Abs(dx) < Math.Abs(dy);
+                        break;
+                    case "down":
+                        isCandidate = dy > 10 && Math.Abs(dx) < Math.Abs(dy);
+                        break;
+                }
+
+                if (isCandidate)
+                {
+                    double distance = Math.Sqrt(dx * dx + dy * dy);
+                    if (distance < bestDistance)
+                    {
+                        bestDistance = distance;
+                        target = table;
+                    }
+                }
+            }
+
+            if (target != null)
+            {
+                SelectSingleTable(target);
+            }
+        }
+
+        /// <summary>
+        /// Cycles through connected tables (Tab key).
+        /// </summary>
+        public void CycleConnectedTables(bool reverse = false)
+        {
+            if (_selectedTable == null || Relationships.Count == 0)
+            {
+                // If nothing selected, select first table
+                if (Tables.Count > 0)
+                {
+                    SelectSingleTable(Tables[0]);
+                }
+                return;
+            }
+
+            // Get all tables connected to current selection
+            var connectedTables = new List<ModelDiagramTableViewModel>();
+            foreach (var rel in Relationships)
+            {
+                if (rel.FromTable == _selectedTable.TableName)
+                {
+                    var toTable = Tables.FirstOrDefault(t => t.TableName == rel.ToTable);
+                    if (toTable != null && !connectedTables.Contains(toTable))
+                        connectedTables.Add(toTable);
+                }
+                else if (rel.ToTable == _selectedTable.TableName)
+                {
+                    var fromTable = Tables.FirstOrDefault(t => t.TableName == rel.FromTable);
+                    if (fromTable != null && !connectedTables.Contains(fromTable))
+                        connectedTables.Add(fromTable);
+                }
+            }
+
+            if (connectedTables.Count == 0) return;
+
+            // Sort by name for consistent ordering
+            connectedTables = connectedTables.OrderBy(t => t.TableName).ToList();
+
+            // Find current position and move to next
+            int currentIndex = -1;
+            for (int i = 0; i < connectedTables.Count; i++)
+            {
+                if (connectedTables[i] == _selectedTable)
+                {
+                    currentIndex = i;
+                    break;
+                }
+            }
+
+            int nextIndex = reverse
+                ? (currentIndex <= 0 ? connectedTables.Count - 1 : currentIndex - 1)
+                : ((currentIndex + 1) % connectedTables.Count);
+
+            SelectSingleTable(connectedTables[nextIndex]);
+        }
+
+        /// <summary>
+        /// Event to request navigation to a table in the metadata pane.
+        /// </summary>
+        public event EventHandler<string> NavigateToMetadataRequested;
+
+        /// <summary>
+        /// Navigates to the selected table in the metadata pane.
+        /// </summary>
+        public void JumpToMetadataPane()
+        {
+            if (_selectedTable != null)
+            {
+                NavigateToMetadataRequested?.Invoke(this, _selectedTable.TableName);
+            }
+        }
+
+        #endregion
+
+        /// <summary>
+        /// Saves the current layout to the cache file.
+        /// </summary>
+        private void SaveCurrentLayout()
+        {
+            if (string.IsNullOrEmpty(_currentModelKey) || Tables.Count == 0) return;
+
+            try
+            {
+                // Load existing layouts
+                var layouts = LoadLayoutCache();
+
+                // Create layout data for current model
+                var layoutData = new ModelLayoutData
+                {
+                    ModelKey = _currentModelKey,
+                    LastModified = DateTime.UtcNow,
+                    TablePositions = Tables.ToDictionary(
+                        t => t.TableName,
+                        t => new TablePosition { X = t.X, Y = t.Y, Width = t.Width, Height = t.Height, IsCollapsed = t.IsCollapsed }
+                    )
+                };
+
+                // Update or add
+                layouts[_currentModelKey] = layoutData;
+
+                // Prune old entries (keep last 50 models)
+                if (layouts.Count > 50)
+                {
+                    var oldest = layouts.OrderBy(kvp => kvp.Value.LastModified).Take(layouts.Count - 50).Select(kvp => kvp.Key).ToList();
+                    foreach (var key in oldest)
+                    {
+                        layouts.Remove(key);
+                    }
+                }
+
+                // Save to file
+                var directory = Path.GetDirectoryName(LayoutCacheFilePath);
+                if (!Directory.Exists(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                var json = JsonConvert.SerializeObject(layouts, Formatting.None);
+                File.WriteAllText(LayoutCacheFilePath, json);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to save model diagram layout");
+            }
+        }
+
+        /// <summary>
+        /// Tries to load a saved layout for the current model.
+        /// </summary>
+        /// <returns>True if layout was loaded, false otherwise.</returns>
+        private bool TryLoadSavedLayout()
+        {
+            if (string.IsNullOrEmpty(_currentModelKey)) return false;
+
+            try
+            {
+                var layouts = LoadLayoutCache();
+                if (!layouts.TryGetValue(_currentModelKey, out var layoutData)) return false;
+
+                // Apply saved positions
+                bool anyApplied = false;
+                foreach (var table in Tables)
+                {
+                    if (layoutData.TablePositions.TryGetValue(table.TableName, out var pos))
+                    {
+                        table.X = pos.X;
+                        table.Y = pos.Y;
+                        table.Width = pos.Width > 0 ? pos.Width : 200;
+                        table.Height = pos.Height > 0 ? pos.Height : 180;
+                        table.IsCollapsed = pos.IsCollapsed;
+                        anyApplied = true;
+                    }
+                }
+
+                if (anyApplied)
+                {
+                    // Calculate canvas size
+                    var maxX = Tables.Max(t => t.X + t.Width);
+                    var maxY = Tables.Max(t => t.Y + t.Height);
+                    CanvasWidth = Math.Max(100, maxX + 40);
+                    CanvasHeight = Math.Max(100, maxY + 40);
+
+                    // Update relationship paths
+                    foreach (var rel in Relationships)
+                    {
+                        rel.UpdatePath();
+                    }
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to load model diagram layout");
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Loads the layout cache from disk.
+        /// </summary>
+        private Dictionary<string, ModelLayoutData> LoadLayoutCache()
+        {
+            try
+            {
+                if (File.Exists(LayoutCacheFilePath))
+                {
+                    var json = File.ReadAllText(LayoutCacheFilePath);
+                    return JsonConvert.DeserializeObject<Dictionary<string, ModelLayoutData>>(json)
+                           ?? new Dictionary<string, ModelLayoutData>();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to read layout cache file");
+            }
+            return new Dictionary<string, ModelLayoutData>();
         }
 
         #endregion
@@ -656,6 +1429,49 @@ namespace DaxStudio.UI.ViewModels
         public bool IsDateTable => _table.IsDateTable;
         public int ColumnCount => Columns.Count(c => c.ObjectType == ADOTabularObjectType.Column);
         public int MeasureCount => Columns.Count(c => c.ObjectType == ADOTabularObjectType.Measure);
+
+        private string _group;
+        /// <summary>
+        /// The group this table belongs to (for visual grouping).
+        /// </summary>
+        public string Group
+        {
+            get => _group;
+            set 
+            { 
+                _group = value; 
+                NotifyOfPropertyChange(); 
+                NotifyOfPropertyChange(nameof(HasGroup));
+                NotifyOfPropertyChange(nameof(GroupColor));
+            }
+        }
+
+        /// <summary>
+        /// Whether this table has a group assigned.
+        /// </summary>
+        public bool HasGroup => !string.IsNullOrEmpty(Group);
+
+        /// <summary>
+        /// Color for the group indicator bar.
+        /// Uses a hash of the group name to generate consistent colors.
+        /// </summary>
+        public string GroupColor
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(Group)) return "#CCCCCC";
+                
+                // Generate a consistent color from the group name
+                var hash = Group.GetHashCode();
+                var colors = new[]
+                {
+                    "#E91E63", "#9C27B0", "#673AB7", "#3F51B5", "#2196F3",
+                    "#03A9F4", "#00BCD4", "#009688", "#4CAF50", "#8BC34A",
+                    "#CDDC39", "#FFC107", "#FF9800", "#FF5722", "#795548"
+                };
+                return colors[Math.Abs(hash) % colors.Length];
+            }
+        }
 
         public BindableCollection<ModelDiagramColumnViewModel> Columns { get; }
 
@@ -761,6 +1577,14 @@ namespace DaxStudio.UI.ViewModels
         public double LeftEdgeX => X;
         public double LeftEdgeY => Y + Height / 2;
 
+        // Top edge for relationships
+        public double TopEdgeX => X + Width / 2;
+        public double TopEdgeY => Y;
+
+        // Bottom edge for relationships
+        public double BottomEdgeX => X + Width / 2;
+        public double BottomEdgeY => Y + Height;
+
         #endregion
 
         #region State Properties
@@ -784,6 +1608,26 @@ namespace DaxStudio.UI.ViewModels
         {
             get => _isSearchMatch;
             set { _isSearchMatch = value; NotifyOfPropertyChange(); }
+        }
+
+        private bool _isDimmed;
+        /// <summary>
+        /// Whether this table should be visually dimmed (e.g., when another table is hovered).
+        /// </summary>
+        public bool IsDimmed
+        {
+            get => _isDimmed;
+            set { _isDimmed = value; NotifyOfPropertyChange(); }
+        }
+
+        private bool _isHovered;
+        /// <summary>
+        /// Whether the mouse is currently hovering over this table.
+        /// </summary>
+        public bool IsHovered
+        {
+            get => _isHovered;
+            set { _isHovered = value; NotifyOfPropertyChange(); }
         }
 
         #endregion
@@ -986,6 +1830,26 @@ namespace DaxStudio.UI.ViewModels
         public bool IsActive => _relationship.IsActive;
 
         /// <summary>
+        /// The "From" side cardinality symbol (1 or *)
+        /// </summary>
+        public string FromCardinality => _relationship.FromColumnMultiplicity == "*" ? "*" : "1";
+
+        /// <summary>
+        /// The "To" side cardinality symbol (1 or *)
+        /// </summary>
+        public string ToCardinality => _relationship.ToColumnMultiplicity == "*" ? "*" : "1";
+
+        /// <summary>
+        /// Tooltip for the "From" side cardinality.
+        /// </summary>
+        public string FromCardinalityTooltip => $"{FromTable}[{FromColumn}] ({(FromCardinality == "*" ? "Many" : "One")})";
+
+        /// <summary>
+        /// Tooltip for the "To" side cardinality.
+        /// </summary>
+        public string ToCardinalityTooltip => $"{ToTable}[{ToColumn}] ({(ToCardinality == "*" ? "Many" : "One")})";
+
+        /// <summary>
         /// Whether this relationship is many-to-many.
         /// </summary>
         public bool IsManyToMany =>
@@ -996,6 +1860,26 @@ namespace DaxStudio.UI.ViewModels
         /// </summary>
         public bool IsBidirectional =>
             string.Equals(_relationship.CrossFilterDirection, "Both", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Inverse of IsActive for binding convenience.
+        /// </summary>
+        public bool IsInactive => !IsActive;
+
+        /// <summary>
+        /// Whether the center indicator panel should be shown (has BiDi, M:M, or Inactive).
+        /// </summary>
+        public bool HasCenterIndicators => IsBidirectional || IsManyToMany || IsInactive;
+
+        /// <summary>
+        /// Whether the filter flows from "From" to "To" (single direction or both)
+        /// </summary>
+        public bool FiltersToEnd => true; // Filter always flows from "From" side
+
+        /// <summary>
+        /// Whether the filter flows from "To" to "From" (bi-directional only)
+        /// </summary>
+        public bool FiltersToStart => IsBidirectional;
 
         /// <summary>
         /// Text representation of cardinality for display.
@@ -1033,6 +1917,11 @@ namespace DaxStudio.UI.ViewModels
             get => _isDimmed;
             set { _isDimmed = value; NotifyOfPropertyChange(); }
         }
+
+        /// <summary>
+        /// Tracks whether UpdatePath has been called at least once.
+        /// </summary>
+        private bool _isPathInitialized;
 
         #endregion
 
@@ -1097,10 +1986,28 @@ namespace DaxStudio.UI.ViewModels
         {
             get
             {
-                double midX = (StartX + EndX) / 2;
-                return string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                    "M {0},{1} C {2},{3} {4},{5} {6},{7}",
-                    StartX, StartY, midX, StartY, midX, EndY, EndX, EndY);
+                // Return empty if positions not initialized
+                if (!HasValidPositions) return string.Empty;
+                
+                // Determine if this is a horizontal or vertical relationship
+                bool isVertical = (_startEdge == EdgeType.Top || _startEdge == EdgeType.Bottom);
+                
+                if (isVertical)
+                {
+                    // Vertical bezier curve (for top/bottom connections)
+                    double midY = (StartY + EndY) / 2;
+                    return string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                        "M {0},{1} C {2},{3} {4},{5} {6},{7}",
+                        StartX, StartY, StartX, midY, EndX, midY, EndX, EndY);
+                }
+                else
+                {
+                    // Horizontal bezier curve (for left/right connections)
+                    double midX = (StartX + EndX) / 2;
+                    return string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                        "M {0},{1} C {2},{3} {4},{5} {6},{7}",
+                        StartX, StartY, midX, StartY, midX, EndY, EndX, EndY);
+                }
             }
         }
 
@@ -1111,29 +2018,294 @@ namespace DaxStudio.UI.ViewModels
         public double LabelY => (StartY + EndY) / 2 - 10;
 
         /// <summary>
+        /// Position for the "From" cardinality label (near start, offset along the curve).
+        /// </summary>
+        public double FromCardinalityX
+        {
+            get
+            {
+                bool isVertical = (_startEdge == EdgeType.Top || _startEdge == EdgeType.Bottom);
+                if (isVertical)
+                {
+                    // For vertical connections, position to the side
+                    return StartX + 5;
+                }
+                else
+                {
+                    // For horizontal connections, position along the line
+                    double offset = EndX > StartX ? 8 : -20;
+                    return StartX + offset;
+                }
+            }
+        }
+        
+        public double FromCardinalityY
+        {
+            get
+            {
+                bool isVertical = (_startEdge == EdgeType.Top || _startEdge == EdgeType.Bottom);
+                if (isVertical)
+                {
+                    // For vertical connections, position along the line
+                    double offset = EndY > StartY ? 8 : -15;
+                    return StartY + offset;
+                }
+                else
+                {
+                    // For horizontal connections, position above/below
+                    double offset = EndY > StartY ? -15 : 5;
+                    return StartY + offset;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Position for the "To" cardinality label (near end, offset along the curve).
+        /// </summary>
+        public double ToCardinalityX
+        {
+            get
+            {
+                bool isVertical = (_startEdge == EdgeType.Top || _startEdge == EdgeType.Bottom);
+                if (isVertical)
+                {
+                    // For vertical connections, position to the side
+                    return EndX + 5;
+                }
+                else
+                {
+                    // For horizontal connections, position along the line
+                    double offset = EndX > StartX ? -20 : 8;
+                    return EndX + offset;
+                }
+            }
+        }
+        
+        public double ToCardinalityY
+        {
+            get
+            {
+                bool isVertical = (_startEdge == EdgeType.Top || _startEdge == EdgeType.Bottom);
+                if (isVertical)
+                {
+                    // For vertical connections, position along the line
+                    double offset = EndY > StartY ? -15 : 8;
+                    return EndY + offset;
+                }
+                else
+                {
+                    // For horizontal connections, position above/below
+                    double offset = EndY > StartY ? 5 : -15;
+                    return EndY + offset;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Returns true when the relationship path has been initialized via UpdatePath().
+        /// </summary>
+        public bool HasValidPositions => _isPathInitialized;
+
+        /// <summary>
+        /// Arrow path data pointing toward the "To" table (filter direction).
+        /// Returns empty string - arrows removed to avoid visual artifacts.
+        /// Filter direction is indicated by the relationship flowing from "From" to "To" table.
+        /// </summary>
+        public string ArrowToPathData => string.Empty;
+
+        /// <summary>
+        /// Arrow path data pointing toward the "From" table (bi-directional filter).
+        /// Returns empty string - arrows removed to avoid visual artifacts.
+        /// BiDi is indicated by the "BiDi" label in the center of the relationship line.
+        /// </summary>
+        public string ArrowFromPathData => string.Empty;
+
+        /// <summary>
+        /// Enum for edge selection.
+        /// </summary>
+        private enum EdgeType { Left, Right, Top, Bottom }
+
+        /// <summary>
+        /// The edge type used for the start of the relationship line.
+        /// </summary>
+        private EdgeType _startEdge;
+
+        /// <summary>
+        /// The edge type used for the end of the relationship line.
+        /// </summary>
+        private EdgeType _endEdge;
+
+        /// <summary>
         /// Updates the path based on table positions.
+        /// Chooses the optimal edge (top, bottom, left, right) to minimize line crossings.
         /// </summary>
         public void UpdatePath()
         {
-            // Determine which edges to connect based on relative positions
-            if (_fromTable.CenterX < _toTable.CenterX)
+            // Calculate distances for each edge combination and pick the shortest
+            var fromCenter = new Point(_fromTable.CenterX, _fromTable.CenterY);
+            var toCenter = new Point(_toTable.CenterX, _toTable.CenterY);
+
+            // Calculate the angle between centers to determine primary direction
+            double dx = toCenter.X - fromCenter.X;
+            double dy = toCenter.Y - fromCenter.Y;
+
+            // Determine if the relationship is more horizontal or vertical
+            bool isMoreHorizontal = Math.Abs(dx) > Math.Abs(dy);
+
+            // Check for overlapping tables (use vertical edges for stacked tables)
+            bool tablesOverlapHorizontally = 
+                _fromTable.X < _toTable.X + _toTable.Width && 
+                _fromTable.X + _fromTable.Width > _toTable.X;
+            bool tablesOverlapVertically = 
+                _fromTable.Y < _toTable.Y + _toTable.Height && 
+                _fromTable.Y + _fromTable.Height > _toTable.Y;
+
+            if (tablesOverlapHorizontally && !tablesOverlapVertically)
             {
-                // From table is to the left, connect right edge to left edge
-                StartX = _fromTable.RightEdgeX;
-                StartY = _fromTable.RightEdgeY;
-                EndX = _toTable.LeftEdgeX;
-                EndY = _toTable.LeftEdgeY;
+                // Tables are stacked vertically - use top/bottom edges
+                if (fromCenter.Y < toCenter.Y)
+                {
+                    // From is above To
+                    SetEdges(_fromTable.BottomEdgeX, _fromTable.BottomEdgeY, EdgeType.Bottom,
+                             _toTable.TopEdgeX, _toTable.TopEdgeY, EdgeType.Top);
+                }
+                else
+                {
+                    // From is below To
+                    SetEdges(_fromTable.TopEdgeX, _fromTable.TopEdgeY, EdgeType.Top,
+                             _toTable.BottomEdgeX, _toTable.BottomEdgeY, EdgeType.Bottom);
+                }
+            }
+            else if (tablesOverlapVertically && !tablesOverlapHorizontally)
+            {
+                // Tables are side by side - use left/right edges
+                if (fromCenter.X < toCenter.X)
+                {
+                    SetEdges(_fromTable.RightEdgeX, _fromTable.RightEdgeY, EdgeType.Right,
+                             _toTable.LeftEdgeX, _toTable.LeftEdgeY, EdgeType.Left);
+                }
+                else
+                {
+                    SetEdges(_fromTable.LeftEdgeX, _fromTable.LeftEdgeY, EdgeType.Left,
+                             _toTable.RightEdgeX, _toTable.RightEdgeY, EdgeType.Right);
+                }
+            }
+            else if (isMoreHorizontal)
+            {
+                // Primarily horizontal relationship - prefer left/right edges
+                if (dx > 0)
+                {
+                    SetEdges(_fromTable.RightEdgeX, _fromTable.RightEdgeY, EdgeType.Right,
+                             _toTable.LeftEdgeX, _toTable.LeftEdgeY, EdgeType.Left);
+                }
+                else
+                {
+                    SetEdges(_fromTable.LeftEdgeX, _fromTable.LeftEdgeY, EdgeType.Left,
+                             _toTable.RightEdgeX, _toTable.RightEdgeY, EdgeType.Right);
+                }
             }
             else
             {
-                // From table is to the right, connect left edge to right edge
-                StartX = _fromTable.LeftEdgeX;
-                StartY = _fromTable.LeftEdgeY;
-                EndX = _toTable.RightEdgeX;
-                EndY = _toTable.RightEdgeY;
+                // Primarily vertical relationship - prefer top/bottom edges
+                if (dy > 0)
+                {
+                    SetEdges(_fromTable.BottomEdgeX, _fromTable.BottomEdgeY, EdgeType.Bottom,
+                             _toTable.TopEdgeX, _toTable.TopEdgeY, EdgeType.Top);
+                }
+                else
+                {
+                    SetEdges(_fromTable.TopEdgeX, _fromTable.TopEdgeY, EdgeType.Top,
+                             _toTable.BottomEdgeX, _toTable.BottomEdgeY, EdgeType.Bottom);
+                }
             }
+
+            // Mark as initialized so paths will render
+            _isPathInitialized = true;
+
+            // Notify about derived properties
+            NotifyOfPropertyChange(nameof(HasValidPositions));
+            NotifyOfPropertyChange(nameof(PathData));
+            NotifyOfPropertyChange(nameof(FromCardinalityX));
+            NotifyOfPropertyChange(nameof(FromCardinalityY));
+            NotifyOfPropertyChange(nameof(ToCardinalityX));
+            NotifyOfPropertyChange(nameof(ToCardinalityY));
+            NotifyOfPropertyChange(nameof(ArrowToPathData));
+            NotifyOfPropertyChange(nameof(ArrowFromPathData));
+        }
+
+        /// <summary>
+        /// Helper to set edge positions.
+        /// Sets edge types first to ensure derived properties use correct values.
+        /// </summary>
+        private void SetEdges(double startX, double startY, EdgeType startEdge,
+                              double endX, double endY, EdgeType endEdge)
+        {
+            // Set edge types first (before positions trigger notifications)
+            _startEdge = startEdge;
+            _endEdge = endEdge;
+            
+            // Now set positions (which trigger notifications that use edge types)
+            StartX = startX;
+            StartY = startY;
+            EndX = endX;
+            EndY = endY;
+        }
+
+        /// <summary>
+        /// Simple Point struct for calculations.
+        /// </summary>
+        private struct Point
+        {
+            public double X, Y;
+            public Point(double x, double y) { X = x; Y = y; }
         }
 
         #endregion
     }
+
+    #region Layout Persistence Classes
+
+    /// <summary>
+    /// Lightweight data structure for persisting model diagram layouts.
+    /// </summary>
+    public class ModelLayoutData
+    {
+        public string ModelKey { get; set; }
+        public DateTime LastModified { get; set; }
+        public Dictionary<string, TablePosition> TablePositions { get; set; } = new Dictionary<string, TablePosition>();
+    }
+
+    /// <summary>
+    /// Position data for a single table.
+    /// </summary>
+    public class TablePosition
+    {
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Width { get; set; }
+        public double Height { get; set; }
+        public bool IsCollapsed { get; set; }
+    }
+
+    /// <summary>
+    /// Information about a table's role in the model for layout purposes.
+    /// </summary>
+    internal class TableLayoutInfo
+    {
+        public int ConnectionCount { get; set; }
+        public TableRole Role { get; set; }
+    }
+
+    /// <summary>
+    /// Role of a table in the data model.
+    /// </summary>
+    internal enum TableRole
+    {
+        Dimension,  // Lookup table, typically on the "one" side
+        Fact,       // Transaction table, typically on the "many" side
+        Bridge,     // Many-to-many bridge table
+        Standalone  // No relationships
+    }
+
+    #endregion
 }

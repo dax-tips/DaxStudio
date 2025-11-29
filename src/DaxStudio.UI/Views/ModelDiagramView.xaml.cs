@@ -1,9 +1,11 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Shapes;
 using DaxStudio.UI.ViewModels;
 
 namespace DaxStudio.UI.Views
@@ -187,19 +189,41 @@ namespace DaxStudio.UI.Views
                 _coordinateRoot = FindCoordinateRoot(element);
                 if (_coordinateRoot == null) return;
 
+                var position = e.GetPosition(_coordinateRoot);
+
+                if (DataContext is ModelDiagramViewModel vm)
+                {
+                    // Handle Ctrl+click for multi-select
+                    if (Keyboard.Modifiers == ModifierKeys.Control)
+                    {
+                        vm.ToggleTableSelection(tableVm);
+                    }
+                    else
+                    {
+                        // Check if clicking on already-selected table in multi-selection
+                        if (vm.SelectedTables.Count > 1 && vm.SelectedTables.Contains(tableVm))
+                        {
+                            // Start multi-drag without changing selection
+                            UpdateMultiDragStart(tableVm, position);
+                        }
+                        else
+                        {
+                            // Single selection
+                            vm.SelectSingleTable(tableVm);
+                        }
+                    }
+                }
+
                 // Start drag operation
                 _isDragging = true;
-                _dragStartPoint = e.GetPosition(_coordinateRoot);
+                _dragStartPoint = position;
                 _tableStartPosition = new Point(tableVm.X, tableVm.Y);
                 _draggedTable = tableVm;
                 _draggedElement = element;
                 element.CaptureMouse();
 
-                // Also select the table when clicked
-                if (DataContext is ModelDiagramViewModel vm)
-                {
-                    vm.SelectedTable = tableVm;
-                }
+                // Focus the control for keyboard navigation
+                this.Focus();
 
                 e.Handled = true;
             }
@@ -207,15 +231,17 @@ namespace DaxStudio.UI.Views
 
         private void Table_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         {
-            if (_isDragging)
+            if (_isDragging || _isMultiDragging)
             {
                 _isDragging = false;
                 _draggedElement?.ReleaseMouseCapture();
+                EndMultiDrag();
 
-                // Update relationship paths after drag
+                // Update relationship paths after drag and save layout
                 if (DataContext is ModelDiagramViewModel vm)
                 {
                     vm.RefreshLayout();
+                    vm.SaveLayoutAfterDrag();
                 }
 
                 e.Handled = true;
@@ -224,18 +250,27 @@ namespace DaxStudio.UI.Views
 
         private void Table_MouseMove(object sender, MouseEventArgs e)
         {
-            if (_isDragging && _draggedTable != null && _coordinateRoot != null)
+            if (_coordinateRoot == null) return;
+            
+            var currentPosition = e.GetPosition(_coordinateRoot);
+
+            // Handle multi-drag
+            if (_isMultiDragging)
             {
-                var currentPosition = e.GetPosition(_coordinateRoot);
+                HandleMultiDrag(currentPosition);
+                e.Handled = true;
+                return;
+            }
+
+            if (_isDragging && _draggedTable != null)
+            {
                 var delta = currentPosition - _dragStartPoint;
 
-                // Update table position
-                _draggedTable.X = System.Math.Max(0, _tableStartPosition.X + delta.X);
-                _draggedTable.Y = System.Math.Max(0, _tableStartPosition.Y + delta.Y);
-
-                // Update relationship paths during drag
+                // Update table position with optional snap-to-grid
                 if (DataContext is ModelDiagramViewModel vm)
                 {
+                    _draggedTable.X = System.Math.Max(0, vm.SnapToGridValue(_tableStartPosition.X + delta.X));
+                    _draggedTable.Y = System.Math.Max(0, vm.SnapToGridValue(_tableStartPosition.Y + delta.Y));
                     vm.RefreshLayout();
                 }
 
@@ -354,10 +389,11 @@ namespace DaxStudio.UI.Views
                 _isResizing = false;
                 _resizingElement?.ReleaseMouseCapture();
 
-                // Update relationship paths after resize
+                // Update relationship paths after resize and save layout
                 if (DataContext is ModelDiagramViewModel vm)
                 {
                     vm.RefreshLayout();
+                    vm.SaveLayoutAfterDrag();
                 }
 
                 e.Handled = true;
@@ -414,6 +450,229 @@ namespace DaxStudio.UI.Views
                 }
 
                 e.Handled = true;
+            }
+        }
+
+        #endregion
+
+        #region Context Menu Event Handlers
+
+        private void CopyTableName_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuItem menuItem && 
+                menuItem.Parent is ContextMenu contextMenu && 
+                contextMenu.PlacementTarget is FrameworkElement element &&
+                element.DataContext is ModelDiagramTableViewModel tableVm &&
+                DataContext is ModelDiagramViewModel vm)
+            {
+                vm.CopyTableName(tableVm);
+            }
+        }
+
+        private void CopyTableDaxName_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuItem menuItem && 
+                menuItem.Parent is ContextMenu contextMenu && 
+                contextMenu.PlacementTarget is FrameworkElement element &&
+                element.DataContext is ModelDiagramTableViewModel tableVm &&
+                DataContext is ModelDiagramViewModel vm)
+            {
+                vm.CopyTableDaxName(tableVm);
+            }
+        }
+
+        private void CopyColumnName_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuItem menuItem && 
+                menuItem.Parent is ContextMenu contextMenu && 
+                contextMenu.PlacementTarget is FrameworkElement element &&
+                element.DataContext is ModelDiagramColumnViewModel columnVm &&
+                DataContext is ModelDiagramViewModel vm)
+            {
+                vm.CopyColumnName(columnVm);
+            }
+        }
+
+        private void CopyColumnDaxName_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuItem menuItem && 
+                menuItem.Parent is ContextMenu contextMenu && 
+                contextMenu.PlacementTarget is FrameworkElement element &&
+                element.DataContext is ModelDiagramColumnViewModel columnVm &&
+                element.Tag is ModelDiagramTableViewModel tableVm &&
+                DataContext is ModelDiagramViewModel vm)
+            {
+                vm.CopyColumnDaxName(columnVm, tableVm);
+            }
+        }
+
+        private void JumpToMetadata_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuItem menuItem && 
+                menuItem.Parent is ContextMenu contextMenu && 
+                contextMenu.PlacementTarget is FrameworkElement element &&
+                element.DataContext is ModelDiagramTableViewModel tableVm &&
+                DataContext is ModelDiagramViewModel vm)
+            {
+                vm.SelectSingleTable(tableVm);
+                vm.JumpToMetadataPane();
+            }
+        }
+
+        private void CollapseTable_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuItem menuItem && 
+                menuItem.Parent is ContextMenu contextMenu && 
+                contextMenu.PlacementTarget is FrameworkElement element &&
+                element.DataContext is ModelDiagramTableViewModel tableVm)
+            {
+                tableVm.IsCollapsed = true;
+            }
+        }
+
+        private void ExpandTable_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuItem menuItem && 
+                menuItem.Parent is ContextMenu contextMenu && 
+                contextMenu.PlacementTarget is FrameworkElement element &&
+                element.DataContext is ModelDiagramTableViewModel tableVm)
+            {
+                tableVm.IsCollapsed = false;
+            }
+        }
+
+        #endregion
+
+        #region Keyboard Navigation
+
+        private void UserControl_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (DataContext is ModelDiagramViewModel vm)
+            {
+                switch (e.Key)
+                {
+                    case Key.Left:
+                        vm.NavigateToTable("left");
+                        e.Handled = true;
+                        break;
+                    case Key.Right:
+                        vm.NavigateToTable("right");
+                        e.Handled = true;
+                        break;
+                    case Key.Up:
+                        vm.NavigateToTable("up");
+                        e.Handled = true;
+                        break;
+                    case Key.Down:
+                        vm.NavigateToTable("down");
+                        e.Handled = true;
+                        break;
+                    case Key.Tab:
+                        vm.CycleConnectedTables(Keyboard.Modifiers == ModifierKeys.Shift);
+                        e.Handled = true;
+                        break;
+                    case Key.Escape:
+                        vm.ClearSelection();
+                        e.Handled = true;
+                        break;
+                    case Key.A:
+                        if (Keyboard.Modifiers == ModifierKeys.Control)
+                        {
+                            vm.SelectAllTables();
+                            e.Handled = true;
+                        }
+                        break;
+                }
+            }
+        }
+
+        #endregion
+
+        #region Mini-Map
+
+        private void MiniMap_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (DataContext is ModelDiagramViewModel vm && MiniMapCanvas != null)
+            {
+                // Get click position relative to mini-map canvas
+                var pos = e.GetPosition(MiniMapCanvas);
+                
+                // Calculate the actual canvas position to scroll to
+                var scrollToX = pos.X - (MainScrollViewer.ViewportWidth / 2 / vm.Scale);
+                var scrollToY = pos.Y - (MainScrollViewer.ViewportHeight / 2 / vm.Scale);
+                
+                // Scroll to that position
+                MainScrollViewer.ScrollToHorizontalOffset(System.Math.Max(0, scrollToX * vm.Scale));
+                MainScrollViewer.ScrollToVerticalOffset(System.Math.Max(0, scrollToY * vm.Scale));
+            }
+        }
+
+        #endregion
+
+        #region Multi-Selection Drag Support
+
+        private bool _isMultiDragging;
+        private Point _multiDragStartPoint;
+        private Dictionary<ModelDiagramTableViewModel, Point> _multiDragStartPositions;
+
+        /// <summary>
+        /// Updates Table_MouseLeftButtonDown to support multi-selection drag.
+        /// </summary>
+        private void UpdateMultiDragStart(ModelDiagramTableViewModel tableVm, Point position)
+        {
+            if (DataContext is ModelDiagramViewModel vm)
+            {
+                if (vm.SelectedTables.Count > 1 && vm.SelectedTables.Contains(tableVm))
+                {
+                    // Start multi-drag
+                    _isMultiDragging = true;
+                    _multiDragStartPoint = position;
+                    _multiDragStartPositions = new Dictionary<ModelDiagramTableViewModel, Point>();
+                    foreach (var table in vm.SelectedTables)
+                    {
+                        _multiDragStartPositions[table] = new Point(table.X, table.Y);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Handles multi-table drag during mouse move.
+        /// </summary>
+        private void HandleMultiDrag(Point currentPosition)
+        {
+            if (_isMultiDragging && _multiDragStartPositions != null && DataContext is ModelDiagramViewModel vm)
+            {
+                var delta = new Point(
+                    currentPosition.X - _multiDragStartPoint.X,
+                    currentPosition.Y - _multiDragStartPoint.Y);
+
+                foreach (var kvp in _multiDragStartPositions)
+                {
+                    var table = kvp.Key;
+                    var startPos = kvp.Value;
+                    table.X = System.Math.Max(0, vm.SnapToGridValue(startPos.X + delta.X));
+                    table.Y = System.Math.Max(0, vm.SnapToGridValue(startPos.Y + delta.Y));
+                }
+
+                vm.RefreshLayout();
+            }
+        }
+
+        /// <summary>
+        /// Ends multi-table drag.
+        /// </summary>
+        private void EndMultiDrag()
+        {
+            if (_isMultiDragging)
+            {
+                _isMultiDragging = false;
+                _multiDragStartPositions = null;
+                
+                if (DataContext is ModelDiagramViewModel vm)
+                {
+                    vm.SaveLayoutAfterDrag();
+                }
             }
         }
 
