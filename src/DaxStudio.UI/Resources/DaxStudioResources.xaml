@@ -28,8 +28,8 @@
     <Style TargetType="{x:Type ToolTip}" BasedOn="{StaticResource DefaultToolTipStyle}">
         <Setter Property="LayoutTransform">
             <Setter.Value>
-                <ScaleTransform ScaleX="{Binding DataContext.Scale,RelativeSource={RelativeSource Mode=FindAncestor,AncestorType={x:Type ctrl:ZoomableUserControl}}}" 
-                                        ScaleY="{Binding DataContext.Scale,RelativeSource={RelativeSource Mode=FindAncestor,AncestorType={x:Type ctrl:ZoomableUserControl}}}"/>
+                <ScaleTransform ScaleX="{Binding DataContext.Scale,RelativeSource={RelativeSource Mode=FindAncestor,AncestorType={x:Type ctrl:ZoomableUserControl}}, FallbackValue=1}" 
+                                        ScaleY="{Binding DataContext.Scale,RelativeSource={RelativeSource Mode=FindAncestor,AncestorType={x:Type ctrl:ZoomableUserControl}}, FallbackValue=1}"/>
             </Setter.Value>
         </Setter>
     </Style>
