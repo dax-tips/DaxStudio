@@ -475,7 +475,7 @@ namespace DaxStudio.Common
             }
             catch (MsalUiRequiredException)
             {
-                Log.Warning(Constants.LogMessageTemplate, nameof(EntraIdHelper), nameof(RefreshToken), "User not found in cache, prompting user to sign-in interactively");
+                Log.Warning(Constants.LogMessageTemplate, nameof(EntraIdHelper), nameof(RefreshTokenInternalAsync), "User not found in cache, prompting user to sign-in interactively");
 
                 try
                 {
@@ -490,12 +490,12 @@ namespace DaxStudio.Common
                 }
                 catch (MsalException msalex)
                 {
-                    Log.Error(msalex, Constants.LogMessageTemplate, nameof(EntraIdHelper), nameof(RefreshToken), "Error Acquiring Token Interactively");
+                    Log.Error(msalex, Constants.LogMessageTemplate, nameof(EntraIdHelper), nameof(RefreshTokenInternalAsync), "Error Acquiring Token Interactively");
                 }
             }
             catch (Exception ex)
             {
-                Log.Error(ex, Constants.LogMessageTemplate, nameof(EntraIdHelper), nameof(RefreshToken), "Error Acquiring Token Silently");
+                Log.Error(ex, Constants.LogMessageTemplate, nameof(EntraIdHelper), nameof(RefreshTokenInternalAsync), "Error Acquiring Token Silently");
             }
 
             // TODO - not sure if this is the correct way to refresh the token
