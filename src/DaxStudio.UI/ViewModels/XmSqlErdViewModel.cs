@@ -568,8 +568,8 @@ namespace DaxStudio.UI.ViewModels
 
             const double tableWidth = 200;
             const double tableHeight = 180;
-            const double horizontalSpacing = 100;
-            const double verticalSpacing = 60;
+            const double horizontalSpacing = 120;
+            const double verticalSpacing = 80;
             const double padding = 40;
 
             // Build relationship map to understand connectivity
@@ -581,8 +581,7 @@ namespace DaxStudio.UI.ViewModels
                 .ThenByDescending(t => t.HitCount)
                 .ToList();
 
-            // Use a star/radial layout for better visualization
-            // Most connected table goes in center, others radiate outward
+            // Choose layout based on table count
             if (Tables.Count == 1)
             {
                 // Single table - just center it
@@ -596,9 +595,14 @@ namespace DaxStudio.UI.ViewModels
                 // Two tables - place side by side
                 LayoutHorizontal(tablesByConnections, tableWidth, tableHeight, horizontalSpacing, padding);
             }
+            else if (Tables.Count <= 4)
+            {
+                // 3-4 tables - use grid layout (better than cramped circle)
+                LayoutGrid(tablesByConnections, relationshipMap, tableWidth, tableHeight, horizontalSpacing, verticalSpacing, padding);
+            }
             else
             {
-                // 3+ tables - use star layout with most connected table in center
+                // 5+ tables - use star layout with most connected table in center
                 LayoutStar(tablesByConnections, relationshipMap, tableWidth, tableHeight, horizontalSpacing, verticalSpacing, padding);
             }
 
@@ -649,6 +653,85 @@ namespace DaxStudio.UI.ViewModels
                 table.Width = tableWidth;
                 table.Height = tableHeight;
                 x += tableWidth + spacing;
+            }
+        }
+
+        /// <summary>
+        /// Layout 3-4 tables in a smart grid pattern based on relationships.
+        /// Places the most connected table (fact) in center-bottom, dimensions around it.
+        /// </summary>
+        private void LayoutGrid(List<ErdTableViewModel> tables, Dictionary<string, HashSet<string>> relationshipMap,
+            double tableWidth, double tableHeight, double hSpacing, double vSpacing, double padding)
+        {
+            // For 3-4 tables, use a diamond/grid arrangement
+            // Most connected table (fact) goes center-bottom or bottom
+            // Other tables (dimensions) go around the top
+            
+            if (tables.Count == 3)
+            {
+                // Triangle layout: 2 on top, 1 (fact) on bottom center
+                //    [dim1]     [dim2]
+                //         [fact]
+                var factTable = tables[0];
+                var dim1 = tables[1];
+                var dim2 = tables[2];
+                
+                double totalWidth = 2 * tableWidth + hSpacing;
+                double startX = padding;
+                
+                // Top row - dimensions
+                dim1.X = startX;
+                dim1.Y = padding;
+                dim1.Width = tableWidth;
+                dim1.Height = tableHeight;
+                
+                dim2.X = startX + tableWidth + hSpacing;
+                dim2.Y = padding;
+                dim2.Width = tableWidth;
+                dim2.Height = tableHeight;
+                
+                // Bottom row - fact table centered
+                factTable.X = startX + (totalWidth - tableWidth) / 2;
+                factTable.Y = padding + tableHeight + vSpacing;
+                factTable.Width = tableWidth;
+                factTable.Height = tableHeight;
+            }
+            else if (tables.Count == 4)
+            {
+                // Diamond layout: 1 top, 2 middle, 1 (fact) bottom
+                // Or: fact in center, dimensions at corners
+                //        [dim1]
+                //   [dim2]    [dim3]
+                //        [fact]
+                var factTable = tables[0];
+                var dim1 = tables[1];
+                var dim2 = tables[2];
+                var dim3 = tables[3];
+                
+                double centerX = padding + tableWidth + hSpacing / 2;
+                
+                // Top - dimension 1
+                dim1.X = centerX - tableWidth / 2;
+                dim1.Y = padding;
+                dim1.Width = tableWidth;
+                dim1.Height = tableHeight;
+                
+                // Middle row - dimensions 2 and 3
+                dim2.X = padding;
+                dim2.Y = padding + tableHeight + vSpacing;
+                dim2.Width = tableWidth;
+                dim2.Height = tableHeight;
+                
+                dim3.X = padding + tableWidth + hSpacing;
+                dim3.Y = padding + tableHeight + vSpacing;
+                dim3.Width = tableWidth;
+                dim3.Height = tableHeight;
+                
+                // Bottom - fact table centered
+                factTable.X = centerX - tableWidth / 2;
+                factTable.Y = padding + 2 * (tableHeight + vSpacing);
+                factTable.Width = tableWidth;
+                factTable.Height = tableHeight;
             }
         }
 
