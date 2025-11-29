@@ -1629,6 +1629,25 @@ namespace DaxStudio.UI.ViewModels
             }
 
         }
+
+        private bool _showStorageEngineDependencies;
+        [DataMember, DefaultValue(false)]
+        [Category("Preview")]
+        [DisplayName("Show Storage Engine Dependencies")]
+        [Description("Show the Dependencies button in Server Timings to visualize table/column relationships from SE queries.")]
+        public bool ShowStorageEngineDependencies
+        {
+            get => _showStorageEngineDependencies;
+
+            set
+            {
+                _showStorageEngineDependencies = value;
+                _eventAggregator.PublishOnUIThreadAsync(new UpdateGlobalOptions());
+                SettingProvider.SetValue(nameof(ShowStorageEngineDependencies), value, _isInitializing, this);
+                NotifyOfPropertyChange(() => ShowStorageEngineDependencies);
+            }
+
+        }
         #endregion
 
 

@@ -1451,12 +1451,17 @@ namespace DaxStudio.UI.Utils
                     // Add the relationship between physical tables
                     if (!IsTempTable(physFromTable) && !IsTempTable(physToTable))
                     {
-                        // Check if relationship already exists
+                        // Check if relationship already exists (in either direction)
                         var existing = analysis.Relationships.FirstOrDefault(r =>
-                            r.FromTable.Equals(physFromTable, StringComparison.OrdinalIgnoreCase) &&
-                            r.FromColumn.Equals(physFromCol, StringComparison.OrdinalIgnoreCase) &&
-                            r.ToTable.Equals(physToTable, StringComparison.OrdinalIgnoreCase) &&
-                            r.ToColumn.Equals(physToCol, StringComparison.OrdinalIgnoreCase));
+                            (r.FromTable.Equals(physFromTable, StringComparison.OrdinalIgnoreCase) &&
+                             r.FromColumn.Equals(physFromCol, StringComparison.OrdinalIgnoreCase) &&
+                             r.ToTable.Equals(physToTable, StringComparison.OrdinalIgnoreCase) &&
+                             r.ToColumn.Equals(physToCol, StringComparison.OrdinalIgnoreCase)) ||
+                            // Also check reverse direction
+                            (r.FromTable.Equals(physToTable, StringComparison.OrdinalIgnoreCase) &&
+                             r.FromColumn.Equals(physToCol, StringComparison.OrdinalIgnoreCase) &&
+                             r.ToTable.Equals(physFromTable, StringComparison.OrdinalIgnoreCase) &&
+                             r.ToColumn.Equals(physFromCol, StringComparison.OrdinalIgnoreCase)));
 
                         if (existing != null)
                         {
@@ -1528,14 +1533,19 @@ namespace DaxStudio.UI.Utils
                     var (physFromTable, physFromCol) = resolvedFrom.Value;
                     var (physToTable, physToCol) = resolvedTo.Value;
 
-                    // Add the relationship if it doesn't exist yet
+                    // Add the relationship if it doesn't exist yet (check both directions)
                     if (!IsTempTable(physFromTable) && !IsTempTable(physToTable))
                     {
                         var exists = analysis.Relationships.Any(r =>
-                            r.FromTable.Equals(physFromTable, StringComparison.OrdinalIgnoreCase) &&
-                            r.FromColumn.Equals(physFromCol, StringComparison.OrdinalIgnoreCase) &&
-                            r.ToTable.Equals(physToTable, StringComparison.OrdinalIgnoreCase) &&
-                            r.ToColumn.Equals(physToCol, StringComparison.OrdinalIgnoreCase));
+                            (r.FromTable.Equals(physFromTable, StringComparison.OrdinalIgnoreCase) &&
+                             r.FromColumn.Equals(physFromCol, StringComparison.OrdinalIgnoreCase) &&
+                             r.ToTable.Equals(physToTable, StringComparison.OrdinalIgnoreCase) &&
+                             r.ToColumn.Equals(physToCol, StringComparison.OrdinalIgnoreCase)) ||
+                            // Also check reverse direction
+                            (r.FromTable.Equals(physToTable, StringComparison.OrdinalIgnoreCase) &&
+                             r.FromColumn.Equals(physToCol, StringComparison.OrdinalIgnoreCase) &&
+                             r.ToTable.Equals(physFromTable, StringComparison.OrdinalIgnoreCase) &&
+                             r.ToColumn.Equals(physFromCol, StringComparison.OrdinalIgnoreCase)));
 
                         if (!exists)
                         {

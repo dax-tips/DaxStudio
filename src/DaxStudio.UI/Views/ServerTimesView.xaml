@@ -380,6 +380,7 @@
                 <Button DockPanel.Dock="Left" Style="{StaticResource TraceButton}"
                         cal:Message.Attach="[Event Click] = [Action ShowQueryDependencies]"
                         IsEnabled="{Binding CanShowQueryDependencies}"
+                        Visibility="{Binding ShowStorageEngineDependencies, Converter={StaticResource BoolToCollapsedConverter}}"
                         ToolTip="Analyze SE queries to show table and column dependencies">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="📊" FontSize="14" Margin="0 0 4 0"/>

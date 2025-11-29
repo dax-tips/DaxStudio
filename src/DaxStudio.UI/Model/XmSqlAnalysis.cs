@@ -88,15 +88,21 @@ namespace DaxStudio.UI.Model
 
         /// <summary>
         /// Adds or updates a relationship between tables.
+        /// Also checks for the reverse direction to avoid duplicate lines.
         /// </summary>
         public void AddRelationship(string fromTable, string fromColumn, string toTable, string toColumn, XmSqlJoinType joinType)
         {
-            // Check if this relationship already exists
+            // Check if this relationship already exists (in either direction)
             var existing = Relationships.FirstOrDefault(r =>
-                r.FromTable.Equals(fromTable, StringComparison.OrdinalIgnoreCase) &&
-                r.FromColumn.Equals(fromColumn, StringComparison.OrdinalIgnoreCase) &&
-                r.ToTable.Equals(toTable, StringComparison.OrdinalIgnoreCase) &&
-                r.ToColumn.Equals(toColumn, StringComparison.OrdinalIgnoreCase));
+                (r.FromTable.Equals(fromTable, StringComparison.OrdinalIgnoreCase) &&
+                 r.FromColumn.Equals(fromColumn, StringComparison.OrdinalIgnoreCase) &&
+                 r.ToTable.Equals(toTable, StringComparison.OrdinalIgnoreCase) &&
+                 r.ToColumn.Equals(toColumn, StringComparison.OrdinalIgnoreCase)) ||
+                // Also check reverse direction to avoid duplicate lines
+                (r.FromTable.Equals(toTable, StringComparison.OrdinalIgnoreCase) &&
+                 r.FromColumn.Equals(toColumn, StringComparison.OrdinalIgnoreCase) &&
+                 r.ToTable.Equals(fromTable, StringComparison.OrdinalIgnoreCase) &&
+                 r.ToColumn.Equals(fromColumn, StringComparison.OrdinalIgnoreCase)));
 
             if (existing != null)
             {

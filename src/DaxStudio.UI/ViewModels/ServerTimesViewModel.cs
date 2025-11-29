@@ -751,6 +751,8 @@ namespace DaxStudio.UI.ViewModels
 
         public bool ShowStorageEngineNetParallelDuration => Options.ShowStorageEngineNetParallelDuration;
 
+        public bool ShowStorageEngineDependencies => Options.ShowStorageEngineDependencies;
+
         public override string TraceStatusText
         {
             get
