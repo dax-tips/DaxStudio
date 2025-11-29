@@ -466,6 +466,11 @@
                                                     <Path Data="M0,5 L3,8 L9,2 L10,3 L3,10 L-1,6 Z"
                                                           Fill="#32CD32" Width="12" Height="12" Stretch="Uniform" Margin="0,0,2,0"
                                                           Visibility="{Binding IsSelectColumn, Converter={StaticResource BoolToCollapsedConverter}}"/>
+                                                    <!-- Lightning bolt icon for Callback (orange/red - indicates performance issue) -->
+                                                    <Path Data="M7,0 L3,5 L5,5 L2,10 L8,4 L5,4 Z"
+                                                          Fill="#FF5722" Width="12" Height="12" Stretch="Uniform" Margin="0,0,2,0"
+                                                          Visibility="{Binding HasCallback, Converter={StaticResource BoolToCollapsedConverter}}"
+                                                          ToolTip="DAX Callback - reduces Storage Engine efficiency"/>
                                                 </StackPanel>
                                                 
                                                 <!-- Column Name -->
@@ -610,6 +615,13 @@
                         ToolTip="Export diagram as PNG image"/>
                 
                 <ToggleButton DockPanel.Dock="Right"
+                              Content="🗺 Mini-map"
+                              Margin="4,8"
+                              Padding="12,4"
+                              IsChecked="{Binding ShowMiniMap}"
+                              ToolTip="Toggle mini-map navigation panel"/>
+                
+                <ToggleButton DockPanel.Dock="Right"
                               Content="🔥 Bottlenecks"
                               Margin="4,8"
                               Padding="12,4"
@@ -651,13 +663,14 @@
             </DockPanel>
         </ctrl:ClipBorder>
         
-        <!-- Main Canvas Area -->
-        <ScrollViewer x:Name="MainScrollViewer"
-                      Grid.Row="1"
-                      HorizontalScrollBarVisibility="Auto"
-                      VerticalScrollBarVisibility="Auto"
-                      Background="{DynamicResource Theme.Brush.Content.Back}"
-                      PreviewMouseWheel="ScrollViewer_PreviewMouseWheel">
+        <!-- Main Canvas Area with Mini-map Overlay -->
+        <Grid Grid.Row="1">
+            <ScrollViewer x:Name="MainScrollViewer"
+                          HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Auto"
+                          Background="{DynamicResource Theme.Brush.Content.Back}"
+                          PreviewMouseWheel="ScrollViewer_PreviewMouseWheel"
+                          ScrollChanged="MainScrollViewer_ScrollChanged">
             <Grid x:Name="DiagramCanvas"
                   MinWidth="{Binding ActualWidth, ElementName=MainScrollViewer}"
                   MinHeight="{Binding ActualHeight, ElementName=MainScrollViewer}"
@@ -786,9 +799,50 @@
                             <Border Background="{DynamicResource Theme.Brush.MenuBar.Back}"
                                     CornerRadius="3"
                                     Padding="4,1">
-                                <TextBlock Text="{Binding JoinTypeText}"
-                                           FontSize="9"
-                                           Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <!-- Cardinality indicators -->
+                                    <TextBlock Text="{Binding CardinalityText}"
+                                               FontSize="10"
+                                               FontWeight="SemiBold"
+                                               Foreground="{DynamicResource Theme.Brush.Accent}"
+                                               Margin="0,0,4,0"
+                                               VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding CardinalityText}" Value="">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    
+                                    <!-- Join Type -->
+                                    <TextBlock Text="{Binding JoinTypeText}"
+                                               FontSize="9"
+                                               Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
+                                    
+                                    <!-- Bidirectional indicator -->
+                                    <TextBlock Text=" ↔"
+                                               FontSize="10"
+                                               Foreground="#FF5722"
+                                               FontWeight="Bold"
+                                               ToolTip="Bi-directional cross-filtering"
+                                               Margin="2,0,0,0"
+                                               VerticalAlignment="Center"
+                                               Visibility="{Binding IsBidirectional, Converter={StaticResource BoolToCollapsedConverter}}"/>
+                                    
+                                    <!-- M:M Warning indicator -->
+                                    <TextBlock Text=" ⚠"
+                                               FontSize="9"
+                                               Foreground="#E65100"
+                                               ToolTip="Many-to-Many relationship"
+                                               Margin="2,0,0,0"
+                                               VerticalAlignment="Center"
+                                               Visibility="{Binding IsManyToMany, Converter={StaticResource BoolToCollapsedConverter}}"/>
+                                </StackPanel>
                             </Border>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
@@ -814,6 +868,105 @@
                 
             </Grid>
         </ScrollViewer>
+        
+            <!-- Mini-map Overlay (in bottom-right corner) -->
+            <Border x:Name="MiniMapBorder"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Bottom"
+                    Margin="0,0,20,20"
+                    Background="{DynamicResource Theme.Brush.MenuBar.Back}"
+                    BorderBrush="{DynamicResource Theme.Brush.Table.Border}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="4"
+                    Opacity="0.9"
+                    Visibility="{Binding ShowMiniMap, Converter={StaticResource BoolToCollapsedConverter}}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    
+                    <!-- Mini-map Header -->
+                    <Border Grid.Row="0" 
+                            Background="{DynamicResource Theme.Brush.Accent}"
+                            CornerRadius="3,3,0,0"
+                            Padding="4,2"
+                            Margin="-4,-4,-4,4">
+                        <Grid>
+                            <TextBlock Text="Overview"
+                                       FontSize="10"
+                                       FontWeight="SemiBold"
+                                       Foreground="White"
+                                       HorizontalAlignment="Left"/>
+                            <Button Content="✕"
+                                    FontSize="10"
+                                    HorizontalAlignment="Right"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    Foreground="White"
+                                    Cursor="Hand"
+                                    cal:Message.Attach="[Event Click] = [Action ToggleMiniMap]"
+                                    ToolTip="Close mini-map"/>
+                        </Grid>
+                    </Border>
+                    
+                    <!-- Mini-map Canvas -->
+                    <Canvas x:Name="MiniMapCanvas"
+                            Grid.Row="1"
+                            Width="150"
+                            Height="100"
+                            Background="#1A1A1A"
+                            ClipToBounds="True"
+                            MouseLeftButtonDown="MiniMap_MouseLeftButtonDown"
+                            MouseMove="MiniMap_MouseMove"
+                            MouseLeftButtonUp="MiniMap_MouseLeftButtonUp"
+                            Cursor="Hand">
+                        
+                        <!-- Mini-map tables (drawn as simple rectangles) -->
+                        <ItemsControl ItemsSource="{Binding Tables}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <Canvas/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemContainerStyle>
+                                <Style TargetType="ContentPresenter">
+                                    <Setter Property="Canvas.Left" Value="{Binding MiniMapX}"/>
+                                    <Setter Property="Canvas.Top" Value="{Binding MiniMapY}"/>
+                                </Style>
+                            </ItemsControl.ItemContainerStyle>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Rectangle Width="{Binding MiniMapWidth}"
+                                               Height="{Binding MiniMapHeight}"
+                                               Fill="{Binding HeatColor}"
+                                               Opacity="0.8">
+                                        <Rectangle.Style>
+                                            <Style TargetType="Rectangle">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                        <Setter Property="Stroke" Value="#FF0078D4"/>
+                                                        <Setter Property="StrokeThickness" Value="1"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Rectangle.Style>
+                                    </Rectangle>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        
+                        <!-- Viewport rectangle (shows visible area) -->
+                        <Rectangle x:Name="MiniMapViewport"
+                                   Stroke="#FF0078D4"
+                                   StrokeThickness="1"
+                                   Fill="Transparent"
+                                   StrokeDashArray="2 2"/>
+                    </Canvas>
+                </Grid>
+            </Border>
+        </Grid>
         
         <!-- Status Bar -->
         <ctrl:ClipBorder Grid.Row="2"
@@ -864,6 +1017,14 @@
                         <Path Data="M0,5 L3,8 L9,2 L10,3 L3,10 L-1,6 Z"
                               Fill="#32CD32" Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,4,0"/>
                         <TextBlock Text="Select" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    
+                    <!-- Callback -->
+                    <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
+                        <Path Data="M7,0 L3,5 L5,5 L2,10 L8,4 L5,4 Z"
+                              Fill="#FF5722" Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBlock Text="Callback" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"
+                                   ToolTip="DAX callback - indicates reduced SE efficiency"/>
                     </StackPanel>
                     
                     <!-- Heat indicator -->

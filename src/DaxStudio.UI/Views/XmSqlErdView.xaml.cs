@@ -368,5 +368,132 @@ namespace DaxStudio.UI.Views
         }
 
         #endregion
+
+        #region Mini-map Navigation
+
+        private bool _isMiniMapDragging;
+
+        /// <summary>
+        /// Handles scroll changes to update the mini-map viewport rectangle.
+        /// </summary>
+        private void MainScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
+        {
+            UpdateMiniMapViewport();
+            
+            // Update content bounds for mini-map
+            if (DataContext is XmSqlErdViewModel vm)
+            {
+                vm.UpdateContentBounds();
+                UpdateTableMiniMapScales(vm);
+            }
+        }
+
+        /// <summary>
+        /// Updates the mini-map viewport rectangle based on current scroll position.
+        /// </summary>
+        private void UpdateMiniMapViewport()
+        {
+            if (MiniMapViewport == null || MiniMapCanvas == null || DataContext is not XmSqlErdViewModel vm)
+                return;
+
+            // Calculate viewport position and size in mini-map coordinates
+            var contentWidth = vm.ContentWidth > 0 ? vm.ContentWidth : 1000;
+            var contentHeight = vm.ContentHeight > 0 ? vm.ContentHeight : 800;
+
+            var scaleX = MiniMapCanvas.Width / contentWidth;
+            var scaleY = MiniMapCanvas.Height / contentHeight;
+
+            // Get actual viewport dimensions (accounting for zoom)
+            var viewportWidth = MainScrollViewer.ViewportWidth / vm.Scale;
+            var viewportHeight = MainScrollViewer.ViewportHeight / vm.Scale;
+
+            // Get scroll position (accounting for zoom)
+            var scrollX = MainScrollViewer.HorizontalOffset / vm.Scale;
+            var scrollY = MainScrollViewer.VerticalOffset / vm.Scale;
+
+            // Set viewport rectangle position and size
+            Canvas.SetLeft(MiniMapViewport, scrollX * scaleX);
+            Canvas.SetTop(MiniMapViewport, scrollY * scaleY);
+            MiniMapViewport.Width = System.Math.Max(4, viewportWidth * scaleX);
+            MiniMapViewport.Height = System.Math.Max(3, viewportHeight * scaleY);
+
+            // Update ViewModel viewport position
+            vm.ViewportX = scrollX;
+            vm.ViewportY = scrollY;
+        }
+
+        /// <summary>
+        /// Updates the mini-map scale for all tables.
+        /// </summary>
+        private void UpdateTableMiniMapScales(XmSqlErdViewModel vm)
+        {
+            if (MiniMapCanvas == null) return;
+
+            var scaleX = MiniMapCanvas.Width / (vm.ContentWidth > 0 ? vm.ContentWidth : 1000);
+            var scaleY = MiniMapCanvas.Height / (vm.ContentHeight > 0 ? vm.ContentHeight : 800);
+
+            foreach (var table in vm.Tables)
+            {
+                table.SetMiniMapScale(scaleX, scaleY);
+            }
+        }
+
+        private void MiniMap_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            _isMiniMapDragging = true;
+            MiniMapCanvas?.CaptureMouse();
+            NavigateToMiniMapPoint(e.GetPosition(MiniMapCanvas));
+            e.Handled = true;
+        }
+
+        private void MiniMap_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_isMiniMapDragging && e.LeftButton == MouseButtonState.Pressed)
+            {
+                NavigateToMiniMapPoint(e.GetPosition(MiniMapCanvas));
+                e.Handled = true;
+            }
+        }
+
+        private void MiniMap_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (_isMiniMapDragging)
+            {
+                _isMiniMapDragging = false;
+                MiniMapCanvas?.ReleaseMouseCapture();
+                e.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// Navigates the main scroll viewer to the position clicked on the mini-map.
+        /// </summary>
+        private void NavigateToMiniMapPoint(Point miniMapPoint)
+        {
+            if (DataContext is not XmSqlErdViewModel vm || MiniMapCanvas == null)
+                return;
+
+            // Convert mini-map coordinates to content coordinates
+            var contentWidth = vm.ContentWidth > 0 ? vm.ContentWidth : 1000;
+            var contentHeight = vm.ContentHeight > 0 ? vm.ContentHeight : 800;
+
+            var scaleX = contentWidth / MiniMapCanvas.Width;
+            var scaleY = contentHeight / MiniMapCanvas.Height;
+
+            var contentX = miniMapPoint.X * scaleX;
+            var contentY = miniMapPoint.Y * scaleY;
+
+            // Center the viewport on this point
+            var viewportWidth = MainScrollViewer.ViewportWidth / vm.Scale;
+            var viewportHeight = MainScrollViewer.ViewportHeight / vm.Scale;
+
+            var scrollX = (contentX - viewportWidth / 2) * vm.Scale;
+            var scrollY = (contentY - viewportHeight / 2) * vm.Scale;
+
+            MainScrollViewer.ScrollToHorizontalOffset(System.Math.Max(0, scrollX));
+            MainScrollViewer.ScrollToVerticalOffset(System.Math.Max(0, scrollY));
+        }
+
+        #endregion
     }
 }
