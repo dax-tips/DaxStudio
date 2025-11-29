@@ -72,7 +72,7 @@
                                 Background="{Binding HeaderColor}"
                                 MouseLeftButtonDown="TableHeader_MouseLeftButtonDown"
                                 Cursor="Hand"
-                                ToolTip="{Binding Description}">
+                                ToolTip="{Binding Tooltip}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
@@ -251,7 +251,6 @@
                                                         <ColumnDefinition Width="Auto"/>
                                                         <ColumnDefinition Width="Auto"/>
                                                         <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
                                                     
                                                     <!-- Key Indicator -->
@@ -290,25 +289,6 @@
                                                             </Style>
                                                         </TextBlock.Style>
                                                     </TextBlock>
-                                                    
-                                                    <!-- Data Type Indicator Badge -->
-                                                    <Border Grid.Column="3"
-                                                            CornerRadius="3"
-                                                            Padding="3,1"
-                                                            Margin="4,0,0,0"
-                                                            VerticalAlignment="Center">
-                                                        <Border.Style>
-                                                            <Style TargetType="Border">
-                                                                <Setter Property="Background" Value="{Binding DataTypeColor}"/>
-                                                                <Setter Property="Opacity" Value="0.8"/>
-                                                            </Style>
-                                                        </Border.Style>
-                                                        <TextBlock Text="{Binding DataTypeIndicator}"
-                                                                   FontSize="9"
-                                                                   FontWeight="Bold"
-                                                                   Foreground="White"
-                                                                   VerticalAlignment="Center"/>
-                                                    </Border>
                                                 </Grid>
                                             </Border>
                                         </DataTemplate>

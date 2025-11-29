@@ -360,7 +360,7 @@ namespace DaxStudio.UI.ViewModels
             const double tableHeight = 180;
             const double horizontalSpacing = 100;
             const double verticalSpacing = 60;
-            const double padding = 40;
+            const double padding = 150;  // Extra padding to allow room for dragging tables left
 
             // Build relationship map to understand connectivity
             var relationshipMap = BuildRelationshipMap();
@@ -660,7 +660,40 @@ namespace DaxStudio.UI.ViewModels
         public BindableCollection<ModelDiagramColumnViewModel> Columns { get; }
 
         /// <summary>
+        /// Tooltip with table details matching metadata pane style.
+        /// </summary>
+        public string Tooltip
+        {
+            get
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine(Caption);
+                
+                if (Caption != TableName)
+                    sb.AppendLine($"Name: {TableName}");
+                
+                sb.AppendLine($"Columns: {ColumnCount}");
+                sb.AppendLine($"Measures: {MeasureCount}");
+                
+                if (IsDateTable)
+                    sb.AppendLine("📅 Date Table");
+                    
+                if (!IsVisible)
+                    sb.AppendLine("👁 Hidden");
+                    
+                if (!string.IsNullOrEmpty(Description))
+                {
+                    sb.AppendLine();
+                    sb.Append(Description);
+                }
+                
+                return sb.ToString().TrimEnd();
+            }
+        }
+
+        /// <summary>
         /// Header background color based on table type.
+        /// </summary>
         /// </summary>
         public string HeaderColor
         {
@@ -870,26 +903,41 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
-        /// Tooltip with detailed column information.
+        /// Tooltip with detailed column information matching metadata pane.
         /// </summary>
         public string Tooltip
         {
             get
             {
-                var parts = new List<string> { Caption };
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine(Caption);
                 
-                if (IsKey) parts.Add("🔑 Key Column");
-                if (IsMeasure) parts.Add("📊 Measure");
-                else if (IsHierarchy) parts.Add("📚 Hierarchy");
-                else parts.Add($"📋 Column ({DataTypeName})");
+                if (Caption != ColumnName)
+                    sb.AppendLine($"Name: {ColumnName}");
                 
-                if (!string.IsNullOrEmpty(Description))
-                    parts.Add(Description);
+                if (IsKey) 
+                    sb.AppendLine("🔑 Key Column");
                     
+                if (IsMeasure) 
+                    sb.AppendLine("📊 Measure");
+                else if (IsHierarchy) 
+                    sb.AppendLine("📚 Hierarchy");
+                else 
+                    sb.AppendLine($"📋 Column");
+                
+                if (!string.IsNullOrEmpty(DataTypeName))
+                    sb.AppendLine($"Data Type: {DataTypeName}");
+                
                 if (!IsVisible)
-                    parts.Add("(Hidden)");
+                    sb.AppendLine("👁 Hidden");
                     
-                return string.Join("\n", parts);
+                if (!string.IsNullOrEmpty(Description))
+                {
+                    sb.AppendLine();
+                    sb.Append(Description);
+                }
+                    
+                return sb.ToString().TrimEnd();
             }
         }
 
