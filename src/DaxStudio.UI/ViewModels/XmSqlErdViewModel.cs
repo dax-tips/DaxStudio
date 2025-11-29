@@ -407,6 +407,7 @@ namespace DaxStudio.UI.ViewModels
 
         /// <summary>
         /// Analyzes a collection of SE events and builds the ERD model.
+        /// Skips Internal and Batch subclass events for hit counting.
         /// </summary>
         public void AnalyzeEvents(IEnumerable<TraceStorageEngineEvent> events)
         {
@@ -423,7 +424,9 @@ namespace DaxStudio.UI.ViewModels
                 foreach (var evt in events)
                 {
                     // Only parse scan events that have query text
-                    if (evt.IsScanEvent && !string.IsNullOrWhiteSpace(evt.Query))
+                    // Skip Internal and Batch events as they don't represent actual user queries
+                    if (evt.IsScanEvent && !string.IsNullOrWhiteSpace(evt.Query) 
+                        && !evt.IsInternalEvent && !evt.IsBatchEvent)
                     {
                         // Build full metrics including cache hit status and parallelism data
                         var metrics = new XmSqlParser.SeEventMetrics
