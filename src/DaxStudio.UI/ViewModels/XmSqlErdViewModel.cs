@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Linq;
 using System.Windows;
+using System.Windows.Media;
 
 namespace DaxStudio.UI.ViewModels
 {
@@ -38,6 +39,11 @@ namespace DaxStudio.UI.ViewModels
         public override string DefaultDockingPane => "DockBottom";
         public override string ContentId => "storage-engine-dependencies";
         public override bool CanHide => true;
+        
+        /// <summary>
+        /// Icon for the tool window (used by AvalonDock).
+        /// </summary>
+        public ImageSource IconSource => null;
 
         #endregion
 

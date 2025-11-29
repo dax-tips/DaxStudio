@@ -616,12 +616,31 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="🔍" Margin="6,0,4,0" VerticalAlignment="Center" Opacity="0.6"/>
-                        <TextBox Grid.Column="1"
+                        <TextBox x:Name="SearchTextBox" Grid.Column="1"
                                  Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                                  BorderThickness="0"
                                  Background="Transparent"
                                  VerticalAlignment="Center"
-                                 Padding="0,4"/>
+                                 Padding="0,4"
+                                 ToolTip="Search for tables or columns"/>
+                        <!-- Placeholder text (visible when TextBox is empty) -->
+                        <TextBlock Grid.Column="1" 
+                                   Text="Search tables..." 
+                                   Foreground="Gray" 
+                                   IsHitTestVisible="False"
+                                   VerticalAlignment="Center"
+                                   Margin="0,4">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Text, ElementName=SearchTextBox}" Value="">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
                         <Button Grid.Column="2" 
                                 Content="✕" 
                                 FontSize="10"
@@ -658,13 +677,15 @@
                         Content="Clear Selection"
                         Margin="4,8"
                         Padding="12,4"
-                        cal:Message.Attach="[Event Click] = [Action ClearSelection]"/>
+                        cal:Message.Attach="[Event Click] = [Action ClearSelection]"
+                        ToolTip="Clear table selection and highlighting"/>
                 
                 <Button DockPanel.Dock="Right"
                         Content="Copy to Clipboard"
                         Margin="4,8"
                         Padding="12,4"
-                        cal:Message.Attach="[Event Click] = [Action CopyToClipboard]"/>
+                        cal:Message.Attach="[Event Click] = [Action CopyToClipboard]"
+                        ToolTip="Copy diagram summary to clipboard"/>
                 
                 <!-- Query Plan Integration Filter -->
                 <Border DockPanel.Dock="Left"
@@ -714,14 +735,6 @@
             </DockPanel>
         </ctrl:ClipBorder>
         
-        <!-- Main Canvas Area with Mini-map Overlay -->
-        <Grid Grid.Row="1">
-            <ScrollViewer x:Name="MainScrollViewer"
-                          HorizontalScrollBarVisibility="Auto"
-                          VerticalScrollBarVisibility="Auto"
-                          Background="{DynamicResource Theme.Brush.Content.Back}"
-                          PreviewMouseWheel="ScrollViewer_PreviewMouseWheel"
-                          ScrollChanged="MainScrollViewer_ScrollChanged">
         <!-- Main Canvas Area with Mini-map Overlay -->
         <Grid Grid.Row="1">
             <ScrollViewer x:Name="MainScrollViewer"
@@ -1047,105 +1060,6 @@
             </Border>
         </Grid>
         
-            <!-- Mini-map Overlay (in bottom-right corner) -->
-            <Border x:Name="MiniMapBorder"
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Bottom"
-                    Margin="0,0,20,20"
-                    Background="{DynamicResource Theme.Brush.MenuBar.Back}"
-                    BorderBrush="{DynamicResource Theme.Brush.Table.Border}"
-                    BorderThickness="1"
-                    CornerRadius="4"
-                    Padding="4"
-                    Opacity="0.9"
-                    Visibility="{Binding ShowMiniMap, Converter={StaticResource BoolToCollapsedConverter}}">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    
-                    <!-- Mini-map Header -->
-                    <Border Grid.Row="0" 
-                            Background="{DynamicResource Theme.Brush.Accent}"
-                            CornerRadius="3,3,0,0"
-                            Padding="4,2"
-                            Margin="-4,-4,-4,4">
-                        <Grid>
-                            <TextBlock Text="Overview"
-                                       FontSize="10"
-                                       FontWeight="SemiBold"
-                                       Foreground="White"
-                                       HorizontalAlignment="Left"/>
-                            <Button Content="✕"
-                                    FontSize="10"
-                                    HorizontalAlignment="Right"
-                                    Background="Transparent"
-                                    BorderThickness="0"
-                                    Foreground="White"
-                                    Cursor="Hand"
-                                    cal:Message.Attach="[Event Click] = [Action ToggleMiniMap]"
-                                    ToolTip="Close mini-map"/>
-                        </Grid>
-                    </Border>
-                    
-                    <!-- Mini-map Canvas -->
-                    <Canvas x:Name="MiniMapCanvas"
-                            Grid.Row="1"
-                            Width="150"
-                            Height="100"
-                            Background="#1A1A1A"
-                            ClipToBounds="True"
-                            MouseLeftButtonDown="MiniMap_MouseLeftButtonDown"
-                            MouseMove="MiniMap_MouseMove"
-                            MouseLeftButtonUp="MiniMap_MouseLeftButtonUp"
-                            Cursor="Hand">
-                        
-                        <!-- Mini-map tables (drawn as simple rectangles) -->
-                        <ItemsControl ItemsSource="{Binding Tables}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <Canvas/>
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemContainerStyle>
-                                <Style TargetType="ContentPresenter">
-                                    <Setter Property="Canvas.Left" Value="{Binding MiniMapX}"/>
-                                    <Setter Property="Canvas.Top" Value="{Binding MiniMapY}"/>
-                                </Style>
-                            </ItemsControl.ItemContainerStyle>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Rectangle Width="{Binding MiniMapWidth}"
-                                               Height="{Binding MiniMapHeight}"
-                                               Fill="{Binding HeatColor}"
-                                               Opacity="0.8">
-                                        <Rectangle.Style>
-                                            <Style TargetType="Rectangle">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                        <Setter Property="Stroke" Value="#FF0078D4"/>
-                                                        <Setter Property="StrokeThickness" Value="1"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Rectangle.Style>
-                                    </Rectangle>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        
-                        <!-- Viewport rectangle (shows visible area) -->
-                        <Rectangle x:Name="MiniMapViewport"
-                                   Stroke="#FF0078D4"
-                                   StrokeThickness="1"
-                                   Fill="Transparent"
-                                   StrokeDashArray="2 2"/>
-                    </Canvas>
-                </Grid>
-            </Border>
-        </Grid>
-        
         <!-- Status Bar -->
         <ctrl:ClipBorder Grid.Row="2"
                          CornerRadius="4"
@@ -1171,8 +1085,12 @@
                     
                     <!-- Join Key -->
                     <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
-                        <Path Data="M6,0 L6,4 L8,4 L8,6 L6,6 L6,8 L4,8 L4,6 L0,6 L0,4 L4,4 L4,0 Z M5,1 A2,2 0 1,0 5,3 A2,2 0 1,0 5,1"
-                              Fill="#DAA520" Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <Grid Width="12" Height="12" Margin="0,0,4,0" VerticalAlignment="Center">
+                            <Ellipse Width="7" Height="7" Fill="#DAA520" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+                            <Ellipse Width="3" Height="3" Fill="{DynamicResource Theme.Brush.StatusBar.Back}" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="2,2,0,0"/>
+                            <Rectangle Width="6" Height="2" Fill="#DAA520" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,1,0,0"/>
+                            <Rectangle Width="2" Height="2" Fill="#DAA520" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,1,2"/>
+                        </Grid>
                         <TextBlock Text="Join Key" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"/>
                     </StackPanel>
                     
@@ -1195,14 +1113,6 @@
                         <Path Data="M0,5 L3,8 L9,2 L10,3 L3,10 L-1,6 Z"
                               Fill="#32CD32" Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,4,0"/>
                         <TextBlock Text="Select" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"/>
-                    </StackPanel>
-                    
-                    <!-- Callback -->
-                    <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
-                        <Path Data="M7,0 L3,5 L5,5 L2,10 L8,4 L5,4 Z"
-                              Fill="#FF5722" Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                        <TextBlock Text="Callback" Foreground="{DynamicResource Theme.Brush.StatusBar.Fore}" VerticalAlignment="Center"
-                                   ToolTip="DAX callback - indicates reduced SE efficiency"/>
                     </StackPanel>
                     
                     <!-- Callback -->
@@ -1239,12 +1149,13 @@
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
                 
                 <!-- Resize Grip at top -->
                 <Border Grid.Row="0"
-                        Height="6"
+                        Height="8"
                         Background="{DynamicResource Theme.Brush.StatusBar.Back}"
                         Cursor="SizeNS"
                         MouseLeftButtonDown="DetailPanel_ResizeStart"
@@ -1252,32 +1163,41 @@
                         MouseLeftButtonUp="DetailPanel_ResizeEnd"
                         ToolTip="Drag to resize">
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <Rectangle Width="30" Height="2" Fill="#666" RadiusX="1" RadiusY="1"/>
+                        <Rectangle Width="40" Height="3" Fill="#888" RadiusX="1" RadiusY="1"/>
                     </StackPanel>
                 </Border>
                 
-                <!-- Content -->
-                <Grid Grid.Row="1" Margin="10,4,10,8">
+                <!-- Header with title and close button -->
+                <Grid Grid.Row="1" Margin="10,4,10,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                  MaxHeight="{Binding DetailPanelHeight}">
-                        <TextBlock Text="{Binding SelectedDetailInfo}"
-                                   Foreground="{DynamicResource Theme.Brush.Default.Fore}"
-                                   FontFamily="Consolas"
-                                   FontSize="12"
-                                   TextWrapping="NoWrap"/>
-                    </ScrollViewer>
+                    <TextBlock Text="Details" 
+                               FontWeight="SemiBold"
+                               FontSize="12"
+                               Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                               VerticalAlignment="Center"/>
                     <Button Grid.Column="1"
                             Content="✕"
                             FontSize="10"
                             Width="20" Height="20"
-                            VerticalAlignment="Top"
+                            VerticalAlignment="Center"
                             cal:Message.Attach="[Event Click] = [Action ClearDetailSelection]"
-                            ToolTip="Close details"/>
+                            ToolTip="Close details panel"/>
                 </Grid>
+                
+                <!-- Content -->
+                <ScrollViewer Grid.Row="2" 
+                              VerticalScrollBarVisibility="Auto"
+                              Margin="10,4,10,8"
+                              MaxHeight="{Binding DetailPanelHeight}">
+                    <TextBlock Text="{Binding SelectedDetailInfo}"
+                               Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                               FontFamily="Consolas"
+                               FontSize="12"
+                               TextWrapping="NoWrap"/>
+                </ScrollViewer>
             </Grid>
         </ctrl:ClipBorder>
         
