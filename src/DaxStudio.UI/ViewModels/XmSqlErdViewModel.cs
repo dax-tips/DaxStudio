@@ -472,6 +472,9 @@ namespace DaxStudio.UI.ViewModels
                 // Create view models for tables
                 CreateTableViewModels();
 
+                // Auto-hide mini-map for small diagrams (fewer than 10 tables)
+                ShowMiniMap = Tables.Count >= 10;
+
                 // Calculate CPU percentages for each table
                 CalculateCpuPercentages(totalCpu);
 
@@ -996,9 +999,10 @@ namespace DaxStudio.UI.ViewModels
 
         #region Mini-map Navigation
 
-        private bool _showMiniMap = true;
+        private bool _showMiniMap = false;
         /// <summary>
         /// Whether to show the mini-map overview panel.
+        /// Auto-enabled when there are 10 or more tables.
         /// </summary>
         public bool ShowMiniMap
         {
