@@ -51,6 +51,24 @@ namespace DaxStudio.UI.Model
         public int UniqueRelationshipsCount => Relationships.Count;
 
         /// <summary>
+        /// Gets the count of DirectQuery tables.
+        /// </summary>
+        public int DirectQueryTableCount => Tables.Values.Count(t => t.IsDirectQuery);
+
+        /// <summary>
+        /// Gets the count of tables with callbacks.
+        /// </summary>
+        public int CallbackTableCount => Tables.Values.Count(t => t.HasCallbacks);
+
+        /// <summary>
+        /// Gets columns across all tables that have callbacks.
+        /// </summary>
+        public IEnumerable<(string TableName, XmSqlColumnInfo Column)> CallbackColumns =>
+            Tables.SelectMany(t => t.Value.Columns.Values
+                .Where(c => c.HasCallback)
+                .Select(c => (t.Key, c)));
+
+        /// <summary>
         /// Gets or adds a table to the analysis.
         /// </summary>
         public XmSqlTableInfo GetOrAddTable(string tableName)
@@ -205,6 +223,26 @@ namespace DaxStudio.UI.Model
         public bool IsJoinedTable { get; set; }
 
         /// <summary>
+        /// Whether this table was accessed via DirectQuery (vs. VertiPaq).
+        /// </summary>
+        public bool IsDirectQuery { get; set; }
+
+        /// <summary>
+        /// The source system for DirectQuery tables.
+        /// </summary>
+        public string DirectQuerySource { get; set; }
+
+        /// <summary>
+        /// Whether this table has columns with DAX callbacks.
+        /// </summary>
+        public bool HasCallbacks => Columns.Values.Any(c => c.HasCallback);
+
+        /// <summary>
+        /// SE Event Query IDs that reference this table.
+        /// </summary>
+        public HashSet<int> QueryIds { get; } = new HashSet<int>();
+
+        /// <summary>
         /// Gets or adds a column to this table.
         /// </summary>
         public XmSqlColumnInfo GetOrAddColumn(string columnName)
@@ -277,6 +315,16 @@ namespace DaxStudio.UI.Model
         /// Filter operators used with this column (=, IN, >, <, etc.)
         /// </summary>
         public HashSet<string> FilterOperators { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Whether this column has a DAX callback (CallbackDataID or EncodeCallback).
+        /// </summary>
+        public bool HasCallback { get; set; }
+
+        /// <summary>
+        /// The type of callback on this column (if any).
+        /// </summary>
+        public string CallbackType { get; set; }
 
         /// <summary>
         /// Adds a usage type to this column.
@@ -355,6 +403,21 @@ namespace DaxStudio.UI.Model
         public int HitCount { get; set; }
 
         /// <summary>
+        /// The cardinality of the relationship (OneToMany, ManyToMany, etc.)
+        /// </summary>
+        public XmSqlCardinality Cardinality { get; set; }
+
+        /// <summary>
+        /// The cross-filter direction (Single, Both).
+        /// </summary>
+        public XmSqlCrossFilterDirection CrossFilterDirection { get; set; }
+
+        /// <summary>
+        /// Whether this is an active relationship.
+        /// </summary>
+        public bool IsActive { get; set; } = true;
+
+        /// <summary>
         /// Returns a unique key for this relationship.
         /// </summary>
         public string Key => $"{FromTable}.{FromColumn}->{ToTable}.{ToColumn}";
@@ -385,5 +448,27 @@ namespace DaxStudio.UI.Model
         InnerJoin,
         RightOuterJoin,
         FullOuterJoin
+    }
+
+    /// <summary>
+    /// Relationship cardinality types.
+    /// </summary>
+    public enum XmSqlCardinality
+    {
+        Unknown,
+        OneToOne,
+        OneToMany,
+        ManyToOne,
+        ManyToMany
+    }
+
+    /// <summary>
+    /// Cross-filter direction for relationships.
+    /// </summary>
+    public enum XmSqlCrossFilterDirection
+    {
+        Unknown,
+        Single,       // One-way filtering (standard)
+        Both          // Bi-directional filtering
     }
 }

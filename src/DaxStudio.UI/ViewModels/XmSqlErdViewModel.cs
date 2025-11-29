@@ -662,6 +662,142 @@ namespace DaxStudio.UI.ViewModels
 
         #endregion
 
+        #region Mini-map Navigation
+
+        private bool _showMiniMap = true;
+        /// <summary>
+        /// Whether to show the mini-map overview panel.
+        /// </summary>
+        public bool ShowMiniMap
+        {
+            get => _showMiniMap;
+            set 
+            { 
+                _showMiniMap = value; 
+                NotifyOfPropertyChange(); 
+            }
+        }
+
+        /// <summary>
+        /// Toggles the mini-map visibility.
+        /// </summary>
+        public void ToggleMiniMap()
+        {
+            ShowMiniMap = !ShowMiniMap;
+        }
+
+        private double _viewportX;
+        /// <summary>
+        /// The X position of the viewport in content coordinates (for mini-map).
+        /// </summary>
+        public double ViewportX
+        {
+            get => _viewportX;
+            set 
+            { 
+                _viewportX = value; 
+                NotifyOfPropertyChange(); 
+            }
+        }
+
+        private double _viewportY;
+        /// <summary>
+        /// The Y position of the viewport in content coordinates (for mini-map).
+        /// </summary>
+        public double ViewportY
+        {
+            get => _viewportY;
+            set 
+            { 
+                _viewportY = value; 
+                NotifyOfPropertyChange(); 
+            }
+        }
+
+        private double _contentWidth = 1000;
+        /// <summary>
+        /// Total width of all content (for mini-map calculations).
+        /// </summary>
+        public double ContentWidth
+        {
+            get => _contentWidth;
+            set 
+            { 
+                _contentWidth = value; 
+                NotifyOfPropertyChange();
+                NotifyOfPropertyChange(nameof(MiniMapScaleX));
+            }
+        }
+
+        private double _contentHeight = 1000;
+        /// <summary>
+        /// Total height of all content (for mini-map calculations).
+        /// </summary>
+        public double ContentHeight
+        {
+            get => _contentHeight;
+            set 
+            { 
+                _contentHeight = value; 
+                NotifyOfPropertyChange();
+                NotifyOfPropertyChange(nameof(MiniMapScaleY));
+            }
+        }
+
+        // Mini-map dimensions
+        private const double MiniMapWidth = 150;
+        private const double MiniMapHeight = 100;
+
+        /// <summary>
+        /// Scale factor for X axis in mini-map.
+        /// </summary>
+        public double MiniMapScaleX => ContentWidth > 0 ? MiniMapWidth / ContentWidth : 1;
+
+        /// <summary>
+        /// Scale factor for Y axis in mini-map.
+        /// </summary>
+        public double MiniMapScaleY => ContentHeight > 0 ? MiniMapHeight / ContentHeight : 1;
+
+        /// <summary>
+        /// Updates content bounds for mini-map based on table positions.
+        /// </summary>
+        public void UpdateContentBounds()
+        {
+            if (Tables.Count == 0)
+            {
+                ContentWidth = 1000;
+                ContentHeight = 800;
+                return;
+            }
+
+            var minX = Tables.Min(t => t.X);
+            var minY = Tables.Min(t => t.Y);
+            var maxX = Tables.Max(t => t.X + t.Width);
+            var maxY = Tables.Max(t => t.Y + t.Height);
+
+            ContentWidth = Math.Max(maxX - minX + 100, ViewWidth);
+            ContentHeight = Math.Max(maxY - minY + 100, ViewHeight);
+        }
+
+        /// <summary>
+        /// Called when mini-map is clicked to navigate to that location.
+        /// </summary>
+        public event EventHandler<Point> MiniMapNavigationRequested;
+
+        /// <summary>
+        /// Navigates to a position on the mini-map (triggered by click).
+        /// </summary>
+        public void NavigateToMiniMapPosition(double miniMapX, double miniMapY)
+        {
+            // Convert mini-map coordinates to content coordinates
+            var contentX = miniMapX / MiniMapScaleX;
+            var contentY = miniMapY / MiniMapScaleY;
+
+            MiniMapNavigationRequested?.Invoke(this, new Point(contentX, contentY));
+        }
+
+        #endregion
+
         #region Bottleneck Analysis
 
         /// <summary>
@@ -1220,6 +1356,26 @@ namespace DaxStudio.UI.ViewModels
         public bool IsJoinedTable => _tableInfo.IsJoinedTable;
         
         /// <summary>
+        /// Whether this table is accessed via DirectQuery (vs. VertiPaq).
+        /// </summary>
+        public bool IsDirectQuery => _tableInfo.IsDirectQuery;
+        
+        /// <summary>
+        /// The DirectQuery source system.
+        /// </summary>
+        public string DirectQuerySource => _tableInfo.DirectQuerySource;
+        
+        /// <summary>
+        /// Whether this table has columns with DAX callbacks.
+        /// </summary>
+        public bool HasCallbacks => _tableInfo.HasCallbacks;
+        
+        /// <summary>
+        /// Number of columns with callbacks.
+        /// </summary>
+        public int CallbackColumnCount => Columns.Count(c => c.HasCallback);
+        
+        /// <summary>
         /// Total estimated rows scanned for this table across all SE queries.
         /// </summary>
         public long TotalEstimatedRows => _tableInfo.TotalEstimatedRows;
@@ -1659,6 +1815,47 @@ namespace DaxStudio.UI.ViewModels
         public double LeftEdgeY => Y + Height / 2;
 
         #endregion
+
+        #region Mini-map Properties
+
+        // Mini-map scale factor (set by parent ViewModel)
+        private double _miniMapScaleX = 0.1;
+        private double _miniMapScaleY = 0.1;
+
+        /// <summary>
+        /// Updates the mini-map scale factors.
+        /// </summary>
+        public void SetMiniMapScale(double scaleX, double scaleY)
+        {
+            _miniMapScaleX = scaleX;
+            _miniMapScaleY = scaleY;
+            NotifyOfPropertyChange(nameof(MiniMapX));
+            NotifyOfPropertyChange(nameof(MiniMapY));
+            NotifyOfPropertyChange(nameof(MiniMapWidth));
+            NotifyOfPropertyChange(nameof(MiniMapHeight));
+        }
+
+        /// <summary>
+        /// X position on mini-map.
+        /// </summary>
+        public double MiniMapX => X * _miniMapScaleX;
+
+        /// <summary>
+        /// Y position on mini-map.
+        /// </summary>
+        public double MiniMapY => Y * _miniMapScaleY;
+
+        /// <summary>
+        /// Width on mini-map.
+        /// </summary>
+        public double MiniMapWidth => Math.Max(4, Width * _miniMapScaleX);
+
+        /// <summary>
+        /// Height on mini-map.
+        /// </summary>
+        public double MiniMapHeight => Math.Max(3, Height * _miniMapScaleY);
+
+        #endregion
     }
 
     /// <summary>
@@ -1680,6 +1877,16 @@ namespace DaxStudio.UI.ViewModels
         public bool IsFilterColumn => _columnInfo.UsageTypes.HasFlag(XmSqlColumnUsage.Filter);
         public bool IsSelectColumn => _columnInfo.UsageTypes.HasFlag(XmSqlColumnUsage.Select);
         public bool IsAggregateColumn => _columnInfo.UsageTypes.HasFlag(XmSqlColumnUsage.Aggregate);
+
+        /// <summary>
+        /// Whether this column has a DAX callback.
+        /// </summary>
+        public bool HasCallback => _columnInfo.HasCallback;
+
+        /// <summary>
+        /// The type of callback (CallbackDataID, EncodeCallback, etc.)
+        /// </summary>
+        public string CallbackType => _columnInfo.CallbackType;
 
         public string AggregationText => _columnInfo.AggregationTypes.Count > 0
             ? string.Join(", ", _columnInfo.AggregationTypes)
@@ -1743,6 +1950,7 @@ namespace DaxStudio.UI.ViewModels
                 if (IsFilterColumn) tips.Add("🔍 Filter");
                 if (IsAggregateColumn) tips.Add("📊 Aggregate (" + AggregationText + ")");
                 if (IsSelectColumn) tips.Add("✓ Selected");
+                if (HasCallback) tips.Add("⚡ Callback (" + CallbackType + ")");
                 return tips.Count > 0 ? string.Join("\n", tips) : "No usage detected";
             }
         }
@@ -1783,6 +1991,54 @@ namespace DaxStudio.UI.ViewModels
         public string ToColumn => _relationship.ToColumn;
         public XmSqlJoinType JoinType => _relationship.JoinType;
         public int HitCount => _relationship.HitCount;
+        public XmSqlCardinality Cardinality => _relationship.Cardinality;
+        public XmSqlCrossFilterDirection CrossFilterDirection => _relationship.CrossFilterDirection;
+
+        /// <summary>
+        /// Whether this relationship is many-to-many.
+        /// </summary>
+        public bool IsManyToMany => Cardinality == XmSqlCardinality.ManyToMany;
+
+        /// <summary>
+        /// Whether this relationship has bi-directional cross-filtering.
+        /// </summary>
+        public bool IsBidirectional => CrossFilterDirection == XmSqlCrossFilterDirection.Both;
+
+        /// <summary>
+        /// Text representation of cardinality for display.
+        /// </summary>
+        public string CardinalityText => Cardinality switch
+        {
+            XmSqlCardinality.OneToOne => "1:1",
+            XmSqlCardinality.OneToMany => "1:*",
+            XmSqlCardinality.ManyToOne => "*:1",
+            XmSqlCardinality.ManyToMany => "*:*",
+            _ => ""
+        };
+
+        /// <summary>
+        /// Symbol for "one" side of relationship.
+        /// </summary>
+        public string FromCardinalitySymbol => Cardinality switch
+        {
+            XmSqlCardinality.OneToOne => "1",
+            XmSqlCardinality.OneToMany => "1",
+            XmSqlCardinality.ManyToOne => "*",
+            XmSqlCardinality.ManyToMany => "*",
+            _ => ""
+        };
+
+        /// <summary>
+        /// Symbol for "many" side of relationship.
+        /// </summary>
+        public string ToCardinalitySymbol => Cardinality switch
+        {
+            XmSqlCardinality.OneToOne => "1",
+            XmSqlCardinality.OneToMany => "*",
+            XmSqlCardinality.ManyToOne => "1",
+            XmSqlCardinality.ManyToMany => "*",
+            _ => ""
+        };
 
         public string JoinTypeText => JoinType switch
         {

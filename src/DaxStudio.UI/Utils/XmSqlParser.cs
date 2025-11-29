@@ -96,6 +96,41 @@ namespace DaxStudio.UI.Utils
             @"(?:PFCASTCOALESCE|COALESCE)\s*\(\s*'(?<table>[^']+)'\s*\[(?<column>[^\]]+)\](?:\s+AS\s+\w+)?\s*\)\s*(?<op>=|<>|!=|>=|<=|>|<)\s*(?:COALESCE\s*\(\s*)?(?<value>'[^']*'|""[^""]*""|-?\d+(?:\.\d+)?)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        // ==================== CALLBACK DETECTION PATTERNS ====================
+
+        // Matches CallbackDataID - indicates DAX callback for the column
+        // Examples: 'Table'[Column] CALLBACKDATAID, CALLBACKDATAID('Table'[Column])
+        private static readonly Regex CallbackDataIdPattern = new Regex(
+            @"CALLBACKDATAID\s*\(?(?:\s*'(?<table>[^']+)'\s*\[(?<column>[^\]]+)\])?\)?|'(?<table2>[^']+)'\s*\[(?<column2>[^\]]+)\]\s+CALLBACKDATAID",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // Matches ENCODECALLBACK - another callback pattern
+        private static readonly Regex EncodeCallbackPattern = new Regex(
+            @"ENCODECALLBACK\s*\(\s*'(?<table>[^']+)'\s*\[(?<column>[^\]]+)\]",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // Matches CALLBACK in general context
+        private static readonly Regex GenericCallbackPattern = new Regex(
+            @"CALLBACK.*?'(?<table>[^']+)'\s*\[(?<column>[^\]]+)\]",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // ==================== CARDINALITY/RELATIONSHIP PATTERNS ====================
+
+        // Matches MANYTOMANY in CREATE SHALLOW RELATION
+        private static readonly Regex ManyToManyPattern = new Regex(
+            @"CREATE\s+SHALLOW\s+RELATION.*?MANYTOMANY",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        // Enhanced CREATE SHALLOW RELATION to capture cardinality hints
+        private static readonly Regex CreateShallowRelationExtendedPattern = new Regex(
+            @"CREATE\s+SHALLOW\s+RELATION\s+'(?<relationName>[^']+)'.*?(?<manyToMany>MANYTOMANY)?.*?FROM\s+'(?<fromTable>[^']+)'\s*\[(?<fromColumn>[^\]]+)\].*?TO\s+'(?<toTable>[^']+)'\s*\[(?<toColumn>[^\]]+)\]",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        // Matches BOTH direction indicators
+        private static readonly Regex BothDirectionPattern = new Regex(
+            @"\bBOTH\b",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         // ==================== LINEAGE TRACKING PATTERNS ====================
 
         // Matches DEFINE TABLE '$TTableX' := ... blocks
@@ -269,6 +304,9 @@ namespace DaxStudio.UI.Utils
 
                 // Parse aggregations
                 ParseAggregations(xmSql, analysis);
+
+                // Parse callback columns (DAX callbacks)
+                ParseCallbacks(xmSql, analysis);
 
                 analysis.SuccessfullyParsedQueries++;
                 return true;
@@ -794,6 +832,84 @@ namespace DaxStudio.UI.Utils
         }
 
         /// <summary>
+        /// Parses callback columns - these indicate DAX callbacks that can't be pushed down to the storage engine.
+        /// </summary>
+        private void ParseCallbacks(string xmSql, XmSqlAnalysis analysis)
+        {
+            // Parse CALLBACKDATAID patterns
+            var callbackMatches = CallbackDataIdPattern.Matches(xmSql);
+            foreach (Match match in callbackMatches)
+            {
+                var tableName = match.Groups["table"].Success ? match.Groups["table"].Value : match.Groups["table2"].Value;
+                var columnName = match.Groups["column"].Success ? match.Groups["column"].Value : match.Groups["column2"].Value;
+
+                if (!string.IsNullOrEmpty(tableName) && !string.IsNullOrEmpty(columnName))
+                {
+                    MarkColumnAsCallback(tableName, columnName, "CallbackDataID", analysis);
+                }
+            }
+
+            // Parse ENCODECALLBACK patterns
+            var encodeMatches = EncodeCallbackPattern.Matches(xmSql);
+            foreach (Match match in encodeMatches)
+            {
+                var tableName = match.Groups["table"].Value;
+                var columnName = match.Groups["column"].Value;
+
+                if (!string.IsNullOrEmpty(tableName) && !string.IsNullOrEmpty(columnName))
+                {
+                    MarkColumnAsCallback(tableName, columnName, "EncodeCallback", analysis);
+                }
+            }
+
+            // Parse generic CALLBACK patterns
+            var genericMatches = GenericCallbackPattern.Matches(xmSql);
+            foreach (Match match in genericMatches)
+            {
+                var tableName = match.Groups["table"].Value;
+                var columnName = match.Groups["column"].Value;
+
+                if (!string.IsNullOrEmpty(tableName) && !string.IsNullOrEmpty(columnName))
+                {
+                    MarkColumnAsCallback(tableName, columnName, "Callback", analysis);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Marks a column as having a callback.
+        /// </summary>
+        private void MarkColumnAsCallback(string tableName, string columnName, string callbackType, XmSqlAnalysis analysis)
+        {
+            // Resolve temp table references to physical tables
+            var resolved = ResolveToPhysicalColumn(tableName, columnName);
+            if (resolved.HasValue && !IsTempTable(resolved.Value.Table))
+            {
+                tableName = resolved.Value.Table;
+                columnName = resolved.Value.Column;
+            }
+            else if (IsTempTable(tableName))
+            {
+                // Couldn't resolve and it's a temp table - skip
+                return;
+            }
+
+            var table = analysis.GetOrAddTable(tableName);
+            if (table != null)
+            {
+                var column = table.GetOrAddColumn(columnName);
+                if (column != null)
+                {
+                    column.HasCallback = true;
+                    if (string.IsNullOrEmpty(column.CallbackType))
+                    {
+                        column.CallbackType = callbackType;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
         /// Parses multiple xmSQL queries and aggregates the results.
         /// </summary>
         /// <param name="queries">Collection of xmSQL query strings.</param>
@@ -1291,19 +1407,26 @@ namespace DaxStudio.UI.Utils
 
         /// <summary>
         /// Parses CREATE SHALLOW RELATION definitions which explicitly define relationships.
+        /// Also extracts cardinality (OneToMany, ManyToMany) and cross-filter direction.
         /// </summary>
         private void ParseShallowRelations(string xmSql, XmSqlAnalysis analysis)
         {
-            var matches = CreateShallowRelationPattern.Matches(xmSql);
+            var matches = CreateShallowRelationExtendedPattern.Matches(xmSql);
             foreach (Match match in matches)
             {
+                var relationName = match.Groups["relationName"].Value;
                 var fromTable = match.Groups["fromTable"].Value;
                 var fromColumn = match.Groups["fromColumn"].Value;
                 var toTable = match.Groups["toTable"].Value;
                 var toColumn = match.Groups["toColumn"].Value;
+                var isManyToMany = match.Groups["manyToMany"].Success;
 
-                Log.Debug("Found SHALLOW RELATION: {From}[{FromCol}] -> {To}[{ToCol}]",
-                    fromTable, fromColumn, toTable, toColumn);
+                // Get the full matched text to check for BOTH direction
+                var fullMatch = match.Value;
+                var isBothDirection = BothDirectionPattern.IsMatch(fullMatch);
+
+                Log.Debug("Found SHALLOW RELATION: {From}[{FromCol}] -> {To}[{ToCol}] ManyToMany={M2M} BothDir={Both}",
+                    fromTable, fromColumn, toTable, toColumn, isManyToMany, isBothDirection);
 
                 // Resolve any temp table references to physical tables
                 var resolvedFrom = ResolveToPhysicalColumn(fromTable, fromColumn);
@@ -1317,7 +1440,51 @@ namespace DaxStudio.UI.Utils
                     // Add the relationship between physical tables
                     if (!IsTempTable(physFromTable) && !IsTempTable(physToTable))
                     {
-                        analysis.AddRelationship(physFromTable, physFromCol, physToTable, physToCol, XmSqlJoinType.Unknown);
+                        // Check if relationship already exists
+                        var existing = analysis.Relationships.FirstOrDefault(r =>
+                            r.FromTable.Equals(physFromTable, StringComparison.OrdinalIgnoreCase) &&
+                            r.FromColumn.Equals(physFromCol, StringComparison.OrdinalIgnoreCase) &&
+                            r.ToTable.Equals(physToTable, StringComparison.OrdinalIgnoreCase) &&
+                            r.ToColumn.Equals(physToCol, StringComparison.OrdinalIgnoreCase));
+
+                        if (existing != null)
+                        {
+                            // Update existing relationship with cardinality info
+                            existing.HitCount++;
+                            if (isManyToMany)
+                            {
+                                existing.Cardinality = XmSqlCardinality.ManyToMany;
+                            }
+                            else if (existing.Cardinality == XmSqlCardinality.Unknown)
+                            {
+                                // Default assumption: OneToMany (common in star schema)
+                                existing.Cardinality = XmSqlCardinality.OneToMany;
+                            }
+                            if (isBothDirection)
+                            {
+                                existing.CrossFilterDirection = XmSqlCrossFilterDirection.Both;
+                            }
+                            else if (existing.CrossFilterDirection == XmSqlCrossFilterDirection.Unknown)
+                            {
+                                existing.CrossFilterDirection = XmSqlCrossFilterDirection.Single;
+                            }
+                        }
+                        else
+                        {
+                            // Add new relationship
+                            var relationship = new XmSqlRelationship
+                            {
+                                FromTable = physFromTable,
+                                FromColumn = physFromCol,
+                                ToTable = physToTable,
+                                ToColumn = physToCol,
+                                JoinType = XmSqlJoinType.Unknown,
+                                HitCount = 1,
+                                Cardinality = isManyToMany ? XmSqlCardinality.ManyToMany : XmSqlCardinality.OneToMany,
+                                CrossFilterDirection = isBothDirection ? XmSqlCrossFilterDirection.Both : XmSqlCrossFilterDirection.Single
+                            };
+                            analysis.Relationships.Add(relationship);
+                        }
 
                         // Mark columns as join keys
                         var fromTableInfo = analysis.GetOrAddTable(physFromTable);
@@ -1328,6 +1495,48 @@ namespace DaxStudio.UI.Utils
 
                         Log.Debug("  Added physical relationship: {From}[{FromCol}] -> {To}[{ToCol}]",
                             physFromTable, physFromCol, physToTable, physToCol);
+                    }
+                }
+            }
+
+            // Fallback: Also parse with original pattern if extended didn't match
+            var fallbackMatches = CreateShallowRelationPattern.Matches(xmSql);
+            foreach (Match match in fallbackMatches)
+            {
+                var fromTable = match.Groups["fromTable"].Value;
+                var fromColumn = match.Groups["fromColumn"].Value;
+                var toTable = match.Groups["toTable"].Value;
+                var toColumn = match.Groups["toColumn"].Value;
+
+                // Resolve any temp table references to physical tables
+                var resolvedFrom = ResolveToPhysicalColumn(fromTable, fromColumn);
+                var resolvedTo = ResolveToPhysicalColumn(toTable, toColumn);
+
+                if (resolvedFrom.HasValue && resolvedTo.HasValue)
+                {
+                    var (physFromTable, physFromCol) = resolvedFrom.Value;
+                    var (physToTable, physToCol) = resolvedTo.Value;
+
+                    // Add the relationship if it doesn't exist yet
+                    if (!IsTempTable(physFromTable) && !IsTempTable(physToTable))
+                    {
+                        var exists = analysis.Relationships.Any(r =>
+                            r.FromTable.Equals(physFromTable, StringComparison.OrdinalIgnoreCase) &&
+                            r.FromColumn.Equals(physFromCol, StringComparison.OrdinalIgnoreCase) &&
+                            r.ToTable.Equals(physToTable, StringComparison.OrdinalIgnoreCase) &&
+                            r.ToColumn.Equals(physToCol, StringComparison.OrdinalIgnoreCase));
+
+                        if (!exists)
+                        {
+                            analysis.AddRelationship(physFromTable, physFromCol, physToTable, physToCol, XmSqlJoinType.Unknown);
+
+                            // Mark columns as join keys
+                            var fromTableInfo = analysis.GetOrAddTable(physFromTable);
+                            fromTableInfo?.GetOrAddColumn(physFromCol)?.AddUsage(XmSqlColumnUsage.Join);
+
+                            var toTableInfo = analysis.GetOrAddTable(physToTable);
+                            toTableInfo?.GetOrAddColumn(physToCol)?.AddUsage(XmSqlColumnUsage.Join);
+                        }
                     }
                 }
             }
