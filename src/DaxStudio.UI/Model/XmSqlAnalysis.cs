@@ -36,6 +36,12 @@ namespace DaxStudio.UI.Model
         public int FailedParseQueries { get; set; }
 
         /// <summary>
+        /// Total CPU time (ms) across all SE queries.
+        /// Used to calculate CPU percentage per table.
+        /// </summary>
+        public long TotalCpuTimeMs { get; set; }
+
+        /// <summary>
         /// Gets the count of unique tables found.
         /// </summary>
         public int UniqueTablesCount => Tables.Count;

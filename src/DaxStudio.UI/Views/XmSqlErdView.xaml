@@ -92,6 +92,7 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 
                                 <!-- Collapse/Expand Toggle -->
@@ -159,6 +160,26 @@
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="🔥" FontSize="10" VerticalAlignment="Center"/>
                                         <TextBlock Text="{Binding BottleneckRank}"
+                                                   FontSize="10"
+                                                   FontWeight="Bold"
+                                                   Foreground="White"
+                                                   Margin="2,0,0,0"
+                                                   VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Border>
+                                
+                                <!-- CPU Hotspot Badge (shown when table uses >= 50% of total CPU) -->
+                                <Border Grid.Column="4"
+                                        Background="#D32F2F"
+                                        CornerRadius="10"
+                                        Padding="6,2"
+                                        Margin="4,0,0,0"
+                                        VerticalAlignment="Center"
+                                        Visibility="{Binding IsCpuHotspot, Converter={StaticResource BoolToCollapsedConverter}}"
+                                        ToolTip="{Binding CpuHotspotTooltip}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="⚡" FontSize="10" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding CpuPercentageFormatted}"
                                                    FontSize="10"
                                                    FontWeight="Bold"
                                                    Foreground="White"
@@ -271,7 +292,7 @@
                             </StackPanel>
                         </Border>
                         
-                        <!-- SE Event Data Row (Cache, Queries, Parallelism) -->
+                        <!-- SE Event Data Row (Cache, Queries, Parallelism, CPU) -->
                         <Border Grid.Row="3"
                                 Padding="8,2"
                                 Background="{DynamicResource Theme.Brush.MenuBar.Back}">
@@ -288,6 +309,12 @@
                                         <MultiDataTrigger>
                                             <MultiDataTrigger.Conditions>
                                                 <Condition Binding="{Binding HasParallelData}" Value="True"/>
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </MultiDataTrigger>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding HasSignificantCpu}" Value="True"/>
                                             </MultiDataTrigger.Conditions>
                                             <Setter Property="Visibility" Value="Visible"/>
                                         </MultiDataTrigger>
@@ -386,6 +413,31 @@
                                                Text=" parallel"
                                                Foreground="{DynamicResource Theme.Brush.Default.Fore}"
                                                VerticalAlignment="Center"/>
+                                </StackPanel>
+                                
+                                <!-- CPU Percentage Indicator (shown when table has significant CPU usage) -->
+                                <StackPanel Orientation="Horizontal" 
+                                            Visibility="{Binding HasSignificantCpu, Converter={StaticResource BoolToCollapsedConverter}}"
+                                            ToolTip="{Binding CpuHotspotTooltip}"
+                                            Margin="4,0,0,0">
+                                    <TextBlock Text="CPU: " FontSize="9" 
+                                               Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding CpuPercentageFormatted}" 
+                                               FontSize="9" FontWeight="SemiBold"
+                                               VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{DynamicResource Theme.Brush.Default.Fore}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsCpuHotspot}" Value="True">
+                                                        <Setter Property="Foreground" Value="#D32F2F"/>
+                                                        <Setter Property="FontWeight" Value="Bold"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
                                 </StackPanel>
                                 
                                 <!-- Query Count (shown when no cache/parallel data but has query count) -->

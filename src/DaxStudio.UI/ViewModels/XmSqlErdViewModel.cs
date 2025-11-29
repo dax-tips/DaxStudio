@@ -75,11 +75,24 @@ namespace DaxStudio.UI.ViewModels
         public BindableCollection<ErdRelationshipViewModel> Relationships { get; } = new BindableCollection<ErdRelationshipViewModel>();
 
         /// <summary>
-        /// Summary text showing counts.
+        /// Summary text showing counts and total CPU.
         /// </summary>
         public string SummaryText => _analysis != null
-            ? $"{Tables.Count} Tables, {Tables.SelectMany(t => t.Columns).Count()} Columns, {Relationships.Count} Relationships (from {_analysis.SuccessfullyParsedQueries:N0} SE queries)"
+            ? $"{Tables.Count} Tables, {Tables.SelectMany(t => t.Columns).Count()} Columns, {Relationships.Count} Relationships (from {_analysis.SuccessfullyParsedQueries:N0} SE queries" +
+              (_analysis.TotalCpuTimeMs > 0 ? $", {FormatDurationStatic(_analysis.TotalCpuTimeMs)} total CPU)" : ")")
             : "No data";
+
+        /// <summary>
+        /// Formats duration in ms with appropriate suffix (static version for summary).
+        /// </summary>
+        private static string FormatDurationStatic(long ms)
+        {
+            if (ms >= 60000)
+                return $"{ms / 60000.0:0.#}m";
+            if (ms >= 1000)
+                return $"{ms / 1000.0:0.#}s";
+            return $"{ms}ms";
+        }
 
         /// <summary>
         /// Whether there is data to display.
@@ -420,6 +433,10 @@ namespace DaxStudio.UI.ViewModels
                 Tables.Clear();
                 Relationships.Clear();
 
+                // Calculate total CPU from all scan events (not batch rollups)
+                // This is used to calculate CPU percentage per table
+                long totalCpu = 0;
+
                 // Parse each SE event's query
                 foreach (var evt in events)
                 {
@@ -428,6 +445,12 @@ namespace DaxStudio.UI.ViewModels
                     if (evt.IsScanEvent && !string.IsNullOrWhiteSpace(evt.Query) 
                         && !evt.IsInternalEvent && !evt.IsBatchEvent)
                     {
+                        // Track total CPU for percentage calculations
+                        if (evt.CpuTime.HasValue && evt.CpuTime.Value > 0)
+                        {
+                            totalCpu += evt.CpuTime.Value;
+                        }
+
                         // Build full metrics including cache hit status and parallelism data
                         var metrics = new XmSqlParser.SeEventMetrics
                         {
@@ -443,8 +466,14 @@ namespace DaxStudio.UI.ViewModels
                     }
                 }
 
+                // Store total CPU in analysis for reference
+                _analysis.TotalCpuTimeMs = totalCpu;
+
                 // Create view models for tables
                 CreateTableViewModels();
+
+                // Calculate CPU percentages for each table
+                CalculateCpuPercentages(totalCpu);
 
                 // Calculate heat map levels
                 CalculateHeatLevels();
@@ -466,6 +495,22 @@ namespace DaxStudio.UI.ViewModels
             finally
             {
                 IsLoading = false;
+            }
+        }
+
+        /// <summary>
+        /// Calculates CPU percentage for each table based on total CPU time.
+        /// </summary>
+        private void CalculateCpuPercentages(long totalCpu)
+        {
+            if (totalCpu <= 0) return;
+
+            foreach (var table in Tables)
+            {
+                if (table.TotalCpuTimeMs > 0)
+                {
+                    table.CpuPercentage = (double)table.TotalCpuTimeMs / totalCpu * 100.0;
+                }
             }
         }
 
@@ -1435,6 +1480,20 @@ namespace DaxStudio.UI.ViewModels
                 }
             }
             
+            // CPU Hotspot warning
+            if (table.IsCpuHotspot)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"⚡ CPU HOTSPOT: {table.CpuPercentageFormatted} of total CPU");
+                sb.AppendLine($"  This table consumes {table.TotalCpuTimeMs:N0}ms of total CPU time");
+                sb.AppendLine("  Consider optimizing queries that access this table");
+            }
+            else if (table.HasSignificantCpu)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"CPU Usage: {table.CpuPercentageFormatted} ({table.TotalCpuTimeMs:N0}ms)");
+            }
+            
             // Callbacks warning
             if (table.HasCallbacks)
             {
@@ -1938,6 +1997,42 @@ namespace DaxStudio.UI.ViewModels
         public string ParallelismTooltip => HasParallelData 
             ? $"Parallelism: {ParallelQueryCount} parallel queries, max {MaxCpuFactor:0.0}x CPU factor, {FormatDuration(TotalParallelDurationMs)} saved"
             : "No parallel execution detected";
+        
+        #endregion
+
+        #region CPU Hotspot Tracking
+        
+        private double _cpuPercentage;
+        /// <summary>
+        /// Percentage of total CPU time consumed by this table (0-100).
+        /// </summary>
+        public double CpuPercentage
+        {
+            get => _cpuPercentage;
+            set { _cpuPercentage = value; NotifyOfPropertyChange(); NotifyOfPropertyChange(nameof(IsCpuHotspot)); NotifyOfPropertyChange(nameof(CpuPercentageFormatted)); NotifyOfPropertyChange(nameof(CpuHotspotTooltip)); }
+        }
+        
+        /// <summary>
+        /// Whether this table is a CPU hotspot (consumes >= 50% of total CPU).
+        /// </summary>
+        public bool IsCpuHotspot => CpuPercentage >= 50.0;
+        
+        /// <summary>
+        /// Whether this table has meaningful CPU data (>= 5% of total).
+        /// </summary>
+        public bool HasSignificantCpu => CpuPercentage >= 5.0;
+        
+        /// <summary>
+        /// Formatted CPU percentage for display.
+        /// </summary>
+        public string CpuPercentageFormatted => CpuPercentage > 0 ? $"{CpuPercentage:0}%" : "";
+        
+        /// <summary>
+        /// Tooltip for CPU hotspot badge.
+        /// </summary>
+        public string CpuHotspotTooltip => TotalCpuTimeMs > 0 
+            ? $"CPU: {FormatDuration(TotalCpuTimeMs)} ({CpuPercentage:0.0}% of total)"
+            : "No CPU data";
         
         #endregion
 
