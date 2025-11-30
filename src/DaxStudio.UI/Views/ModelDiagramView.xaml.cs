@@ -286,6 +286,11 @@ namespace DaxStudio.UI.Views
                 if (sender is FrameworkElement element && element.DataContext is ModelDiagramTableViewModel tableVm)
                 {
                     tableVm.IsCollapsed = !tableVm.IsCollapsed;
+                    // Update relationships connected to this table
+                    if (DataContext is ModelDiagramViewModel vm)
+                    {
+                        vm.UpdateRelationshipsForTable(tableVm);
+                    }
                     e.Handled = true;
                 }
             }
@@ -307,6 +312,11 @@ namespace DaxStudio.UI.Views
                     if (parent is FrameworkElement fe && fe.DataContext is ModelDiagramTableViewModel tableVm)
                     {
                         tableVm.IsCollapsed = !tableVm.IsCollapsed;
+                        // Update relationships connected to this table
+                        if (DataContext is ModelDiagramViewModel vm)
+                        {
+                            vm.UpdateRelationshipsForTable(tableVm);
+                        }
                         e.Handled = true;
                         return;
                     }
@@ -527,6 +537,11 @@ namespace DaxStudio.UI.Views
                 element.DataContext is ModelDiagramTableViewModel tableVm)
             {
                 tableVm.IsCollapsed = true;
+                // Update relationships connected to this table
+                if (DataContext is ModelDiagramViewModel vm)
+                {
+                    vm.UpdateRelationshipsForTable(tableVm);
+                }
             }
         }
 
@@ -538,6 +553,11 @@ namespace DaxStudio.UI.Views
                 element.DataContext is ModelDiagramTableViewModel tableVm)
             {
                 tableVm.IsCollapsed = false;
+                // Update relationships connected to this table
+                if (DataContext is ModelDiagramViewModel vm)
+                {
+                    vm.UpdateRelationshipsForTable(tableVm);
+                }
             }
         }
 

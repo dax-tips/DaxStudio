@@ -34,6 +34,7 @@
                 <Border x:Name="TableBorder"
                         CornerRadius="4"
                         Width="{Binding Width}"
+                        Height="{Binding Height}"
                         MinHeight="80"
                         Background="{DynamicResource Theme.Brush.Content.Back}"
                         Cursor="Hand"

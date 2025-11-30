@@ -711,6 +711,23 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
+        /// Updates relationship paths connected to a specific table.
+        /// Call this after a table's position or size changes.
+        /// </summary>
+        public void UpdateRelationshipsForTable(ModelDiagramTableViewModel table)
+        {
+            if (table == null) return;
+            
+            foreach (var rel in Relationships)
+            {
+                if (rel.FromTableViewModel == table || rel.ToTableViewModel == table)
+                {
+                    rel.UpdatePath();
+                }
+            }
+        }
+
+        /// <summary>
         /// Zooms to fit all tables in the view.
         /// </summary>
         public void ZoomToFit()
@@ -1255,7 +1272,15 @@ namespace DaxStudio.UI.ViewModels
                     LastModified = DateTime.UtcNow,
                     TablePositions = Tables.ToDictionary(
                         t => t.TableName,
-                        t => new TablePosition { X = t.X, Y = t.Y, Width = t.Width, Height = t.Height, IsCollapsed = t.IsCollapsed }
+                        t => new TablePosition 
+                        { 
+                            X = t.X, 
+                            Y = t.Y, 
+                            Width = t.Width, 
+                            Height = t.Height, 
+                            IsCollapsed = t.IsCollapsed,
+                            ExpandedHeight = t.ExpandedHeight
+                        }
                     )
                 };
 
@@ -1311,7 +1336,11 @@ namespace DaxStudio.UI.ViewModels
                         table.Y = pos.Y;
                         table.Width = pos.Width > 0 ? pos.Width : 200;
                         table.Height = pos.Height > 0 ? pos.Height : 180;
-                        table.IsCollapsed = pos.IsCollapsed;
+                        // Use SetCollapsedState to properly restore collapsed state with expanded height
+                        if (pos.IsCollapsed)
+                        {
+                            table.SetCollapsedState(true, pos.ExpandedHeight > 0 ? pos.ExpandedHeight : pos.Height);
+                        }
                         anyApplied = true;
                     }
                 }
@@ -1590,10 +1619,59 @@ namespace DaxStudio.UI.ViewModels
         #region State Properties
 
         private bool _isCollapsed;
+        private double _expandedHeight;
+        private const double CollapsedHeight = 32; // Height for just the header
+
         public bool IsCollapsed
         {
             get => _isCollapsed;
-            set { _isCollapsed = value; NotifyOfPropertyChange(); }
+            set 
+            { 
+                if (_isCollapsed == value) return;
+                
+                if (value)
+                {
+                    // Collapsing: save current height and set to collapsed height
+                    _expandedHeight = Height;
+                    Height = CollapsedHeight;
+                }
+                else
+                {
+                    // Expanding: restore saved height (or calculate default)
+                    Height = _expandedHeight > CollapsedHeight ? _expandedHeight : CalculateDefaultHeight();
+                }
+                
+                _isCollapsed = value; 
+                NotifyOfPropertyChange(); 
+            }
+        }
+
+        /// <summary>
+        /// The height when expanded (for saving/restoring collapse state).
+        /// </summary>
+        public double ExpandedHeight
+        {
+            get => _expandedHeight > CollapsedHeight ? _expandedHeight : Height;
+            set => _expandedHeight = value;
+        }
+
+        /// <summary>
+        /// Sets the collapsed state without triggering height changes (for loading saved state).
+        /// </summary>
+        public void SetCollapsedState(bool isCollapsed, double expandedHeight)
+        {
+            _expandedHeight = expandedHeight;
+            _isCollapsed = isCollapsed;
+            NotifyOfPropertyChange(nameof(IsCollapsed));
+        }
+
+        /// <summary>
+        /// Calculate a reasonable default height based on column/measure count.
+        /// </summary>
+        private double CalculateDefaultHeight()
+        {
+            int itemCount = Columns?.Count ?? 0;
+            return Math.Max(80, Math.Min(50 + itemCount * 20, 400));
         }
 
         private bool _isSelected;
@@ -2285,6 +2363,7 @@ namespace DaxStudio.UI.ViewModels
         public double Width { get; set; }
         public double Height { get; set; }
         public bool IsCollapsed { get; set; }
+        public double ExpandedHeight { get; set; }
     }
 
     /// <summary>

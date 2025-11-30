@@ -2547,6 +2547,14 @@ namespace DaxStudio.UI.ViewModels
         public double LeftEdgeX => X;
         public double LeftEdgeY => Y + Height / 2;
 
+        // Top edge for relationships
+        public double TopEdgeX => X + Width / 2;
+        public double TopEdgeY => Y;
+
+        // Bottom edge for relationships
+        public double BottomEdgeX => X + Width / 2;
+        public double BottomEdgeY => Y + Height;
+
         #endregion
 
         #region Mini-map Properties
@@ -2870,18 +2878,47 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
+        /// Enum for edge selection.
+        /// </summary>
+        private enum EdgeType { Left, Right, Top, Bottom }
+
+        /// <summary>
+        /// The edge type used for the start of the relationship line.
+        /// </summary>
+        private EdgeType _startEdge;
+
+        /// <summary>
+        /// The edge type used for the end of the relationship line.
+        /// </summary>
+        private EdgeType _endEdge;
+
+        /// <summary>
         /// Path data for drawing the relationship line (bezier curve).
+        /// Adapts to horizontal or vertical orientation based on edge types.
         /// </summary>
         public string PathData
         {
             get
             {
-                // Calculate control points for a smooth bezier curve
-                // Use InvariantCulture to ensure decimal points (not commas) are used
-                double midX = (StartX + EndX) / 2;
-                return string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                    "M {0},{1} C {2},{3} {4},{5} {6},{7}",
-                    StartX, StartY, midX, StartY, midX, EndY, EndX, EndY);
+                // Determine if this is a horizontal or vertical relationship
+                bool isVertical = (_startEdge == EdgeType.Top || _startEdge == EdgeType.Bottom);
+                
+                if (isVertical)
+                {
+                    // Vertical bezier curve (for top/bottom connections)
+                    double midY = (StartY + EndY) / 2;
+                    return string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                        "M {0},{1} C {2},{3} {4},{5} {6},{7}",
+                        StartX, StartY, StartX, midY, EndX, midY, EndX, EndY);
+                }
+                else
+                {
+                    // Horizontal bezier curve (for left/right connections)
+                    double midX = (StartX + EndX) / 2;
+                    return string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                        "M {0},{1} C {2},{3} {4},{5} {6},{7}",
+                        StartX, StartY, midX, StartY, midX, EndY, EndX, EndY);
+                }
             }
         }
 
@@ -2893,26 +2930,107 @@ namespace DaxStudio.UI.ViewModels
 
         /// <summary>
         /// Updates the path based on table positions.
+        /// Chooses the optimal edge (top, bottom, left, right) to minimize line crossings.
         /// </summary>
         public void UpdatePath()
         {
-            // Determine which edges to connect based on relative positions
-            if (_fromTable.CenterX < _toTable.CenterX)
+            // Calculate the angle between centers to determine primary direction
+            double dx = _toTable.CenterX - _fromTable.CenterX;
+            double dy = _toTable.CenterY - _fromTable.CenterY;
+
+            // Determine if the relationship is more horizontal or vertical
+            bool isMoreHorizontal = Math.Abs(dx) > Math.Abs(dy);
+
+            // Check for overlapping tables (use vertical edges for stacked tables)
+            bool tablesOverlapHorizontally = 
+                _fromTable.X < _toTable.X + _toTable.Width && 
+                _fromTable.X + _fromTable.Width > _toTable.X;
+            bool tablesOverlapVertically = 
+                _fromTable.Y < _toTable.Y + _toTable.Height && 
+                _fromTable.Y + _fromTable.Height > _toTable.Y;
+
+            // Choose edges based on table positions
+            if (tablesOverlapHorizontally && !tablesOverlapVertically)
             {
-                // From table is to the left, connect right edge to left edge
-                StartX = _fromTable.RightEdgeX;
-                StartY = _fromTable.RightEdgeY;
-                EndX = _toTable.LeftEdgeX;
-                EndY = _toTable.LeftEdgeY;
+                // Tables are stacked vertically - use top/bottom edges
+                if (_fromTable.CenterY < _toTable.CenterY)
+                {
+                    // From is above To
+                    SetEdges(_fromTable.BottomEdgeX, _fromTable.BottomEdgeY, EdgeType.Bottom,
+                             _toTable.TopEdgeX, _toTable.TopEdgeY, EdgeType.Top);
+                }
+                else
+                {
+                    // From is below To
+                    SetEdges(_fromTable.TopEdgeX, _fromTable.TopEdgeY, EdgeType.Top,
+                             _toTable.BottomEdgeX, _toTable.BottomEdgeY, EdgeType.Bottom);
+                }
+            }
+            else if (tablesOverlapVertically && !tablesOverlapHorizontally)
+            {
+                // Tables are side by side - use left/right edges
+                if (_fromTable.CenterX < _toTable.CenterX)
+                {
+                    SetEdges(_fromTable.RightEdgeX, _fromTable.RightEdgeY, EdgeType.Right,
+                             _toTable.LeftEdgeX, _toTable.LeftEdgeY, EdgeType.Left);
+                }
+                else
+                {
+                    SetEdges(_fromTable.LeftEdgeX, _fromTable.LeftEdgeY, EdgeType.Left,
+                             _toTable.RightEdgeX, _toTable.RightEdgeY, EdgeType.Right);
+                }
+            }
+            else if (isMoreHorizontal)
+            {
+                // Primarily horizontal relationship - prefer left/right edges
+                if (dx > 0)
+                {
+                    SetEdges(_fromTable.RightEdgeX, _fromTable.RightEdgeY, EdgeType.Right,
+                             _toTable.LeftEdgeX, _toTable.LeftEdgeY, EdgeType.Left);
+                }
+                else
+                {
+                    SetEdges(_fromTable.LeftEdgeX, _fromTable.LeftEdgeY, EdgeType.Left,
+                             _toTable.RightEdgeX, _toTable.RightEdgeY, EdgeType.Right);
+                }
             }
             else
             {
-                // From table is to the right, connect left edge to right edge
-                StartX = _fromTable.LeftEdgeX;
-                StartY = _fromTable.LeftEdgeY;
-                EndX = _toTable.RightEdgeX;
-                EndY = _toTable.RightEdgeY;
+                // Primarily vertical relationship - prefer top/bottom edges
+                if (dy > 0)
+                {
+                    SetEdges(_fromTable.BottomEdgeX, _fromTable.BottomEdgeY, EdgeType.Bottom,
+                             _toTable.TopEdgeX, _toTable.TopEdgeY, EdgeType.Top);
+                }
+                else
+                {
+                    SetEdges(_fromTable.TopEdgeX, _fromTable.TopEdgeY, EdgeType.Top,
+                             _toTable.BottomEdgeX, _toTable.BottomEdgeY, EdgeType.Bottom);
+                }
             }
+
+            // Notify about derived properties
+            NotifyOfPropertyChange(nameof(PathData));
+            NotifyOfPropertyChange(nameof(LabelX));
+            NotifyOfPropertyChange(nameof(LabelY));
+        }
+
+        /// <summary>
+        /// Helper to set edge positions.
+        /// Sets edge types first to ensure derived properties use correct values.
+        /// </summary>
+        private void SetEdges(double startX, double startY, EdgeType startEdge,
+                              double endX, double endY, EdgeType endEdge)
+        {
+            // Set edge types first (before positions trigger notifications)
+            _startEdge = startEdge;
+            _endEdge = endEdge;
+            
+            // Now set positions (which trigger notifications that use edge types)
+            StartX = startX;
+            StartY = startY;
+            EndX = endX;
+            EndY = endY;
         }
     }
 }
