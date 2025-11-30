@@ -642,10 +642,7 @@
                               Padding="4,2"
                               ToolTip="Filter tables by type">
                         <ComboBoxItem Content="All Tables"/>
-                        <ComboBoxItem Content="Fact Tables"/>
-                        <ComboBoxItem Content="Dimension Tables"/>
                         <ComboBoxItem Content="Date Tables"/>
-                        <ComboBoxItem Content="Measure Tables"/>
                     </ComboBox>
                     <Button Content="Show All"
                             cal:Message.Attach="ShowAllTables"

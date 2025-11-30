@@ -265,7 +265,7 @@ namespace DaxStudio.UI.ViewModels
 
         private int _tableFilter = 0;
         /// <summary>
-        /// Filter tables by type: 0=All, 1=Fact, 2=Dimension, 3=Date, 4=Measure
+        /// Filter tables by type: 0=All, 1=Date Tables Only
         /// </summary>
         public int TableFilter
         {
@@ -283,73 +283,19 @@ namespace DaxStudio.UI.ViewModels
         /// </summary>
         private void ApplyTableFilter()
         {
-            // Pre-calculate table roles for filtering
-            var tableRoles = GetTableRoles();
-            
             foreach (var table in Tables)
             {
-                var role = tableRoles.TryGetValue(table.TableName, out var r) ? r : TableRole.Standalone;
-                
                 switch (_tableFilter)
                 {
                     case 0: // All tables
                         table.IsHidden = false;
                         break;
-                    case 1: // Fact tables - tables primarily on the "many" side of relationships
-                        table.IsHidden = role != TableRole.Fact;
-                        break;
-                    case 2: // Dimension tables - tables primarily on the "one" side of relationships
-                        table.IsHidden = role != TableRole.Dimension && !table.IsDateTable;
-                        break;
-                    case 3: // Date tables only
+                    case 1: // Date tables only
                         table.IsHidden = !table.IsDateTable;
-                        break;
-                    case 4: // Measure tables only (tables with only measures, no data columns)
-                        table.IsHidden = !(table.MeasureCount > 0 && table.ColumnCount == 0);
                         break;
                 }
             }
             RefreshLayout();
-        }
-        
-        /// <summary>
-        /// Gets table roles based on relationship cardinality.
-        /// Fact tables are on the "many" side, Dimension tables are on the "one" side.
-        /// </summary>
-        private Dictionary<string, TableRole> GetTableRoles()
-        {
-            var roles = new Dictionary<string, TableRole>(StringComparer.OrdinalIgnoreCase);
-            
-            foreach (var table in Tables)
-            {
-                int manySideCount = 0;
-                int oneSideCount = 0;
-                
-                foreach (var rel in Relationships)
-                {
-                    if (rel.FromTable.Equals(table.TableName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (rel.FromCardinality == "*") manySideCount++;
-                        else oneSideCount++;
-                    }
-                    else if (rel.ToTable.Equals(table.TableName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (rel.ToCardinality == "*") manySideCount++;
-                        else oneSideCount++;
-                    }
-                }
-                
-                if (manySideCount == 0 && oneSideCount == 0)
-                    roles[table.TableName] = TableRole.Standalone;
-                else if (manySideCount > oneSideCount)
-                    roles[table.TableName] = TableRole.Fact;
-                else if (oneSideCount > manySideCount)
-                    roles[table.TableName] = TableRole.Dimension;
-                else
-                    roles[table.TableName] = TableRole.Bridge;
-            }
-            
-            return roles;
         }
 
         private bool _snapToGrid = false;
