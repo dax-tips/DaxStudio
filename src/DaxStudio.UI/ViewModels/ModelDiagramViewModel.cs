@@ -118,6 +118,7 @@ namespace DaxStudio.UI.ViewModels
             {
                 table.IsCollapsed = true;
             }
+            UpdateAllRelationships();
         }
 
         /// <summary>
@@ -128,6 +129,18 @@ namespace DaxStudio.UI.ViewModels
             foreach (var table in Tables)
             {
                 table.IsCollapsed = false;
+            }
+            UpdateAllRelationships();
+        }
+
+        /// <summary>
+        /// Updates all relationship paths (e.g., after collapse/expand all).
+        /// </summary>
+        public void UpdateAllRelationships()
+        {
+            foreach (var rel in Relationships)
+            {
+                rel.UpdatePath();
             }
         }
 
@@ -2093,7 +2106,28 @@ namespace DaxStudio.UI.ViewModels
         /// Label position (middle of the line).
         /// </summary>
         public double LabelX => (StartX + EndX) / 2;
-        public double LabelY => (StartY + EndY) / 2 - 10;
+        public double LabelY => (StartY + EndY) / 2;
+
+        /// <summary>
+        /// Rotation angle for filter direction arrow pointing toward "From" table (where filter originates).
+        /// 0 = right, 90 = down, 180 = left, 270 = up
+        /// </summary>
+        public double FilterDirectionAngle
+        {
+            get
+            {
+                // Point toward the From table (filter flows from "one" side to "many" side)
+                double dx = StartX - EndX;
+                double dy = StartY - EndY;
+                double angleRadians = Math.Atan2(dy, dx);
+                return angleRadians * 180 / Math.PI;
+            }
+        }
+
+        /// <summary>
+        /// Rotation angle for reverse filter direction (BiDi) pointing toward "To" table.
+        /// </summary>
+        public double ReverseFilterDirectionAngle => FilterDirectionAngle + 180;
 
         /// <summary>
         /// Position for the "From" cardinality label (near start, offset along the curve).
@@ -2309,6 +2343,8 @@ namespace DaxStudio.UI.ViewModels
             NotifyOfPropertyChange(nameof(ToCardinalityY));
             NotifyOfPropertyChange(nameof(ArrowToPathData));
             NotifyOfPropertyChange(nameof(ArrowFromPathData));
+            NotifyOfPropertyChange(nameof(FilterDirectionAngle));
+            NotifyOfPropertyChange(nameof(ReverseFilterDirectionAngle));
         }
 
         /// <summary>

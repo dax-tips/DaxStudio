@@ -418,7 +418,7 @@
                             BorderThickness="1"
                             BorderBrush="#888888">
                         <TextBlock Text="{Binding FromCardinality}"
-                                   FontSize="10"
+                                   FontSize="12"
                                    FontWeight="Bold"
                                    Foreground="{DynamicResource Theme.Brush.Default.Fore}"
                                    ToolTip="{Binding FromCardinalityTooltip}"/>
@@ -433,36 +433,59 @@
                             BorderThickness="1"
                             BorderBrush="#888888">
                         <TextBlock Text="{Binding ToCardinality}"
-                                   FontSize="10"
+                                   FontSize="12"
                                    FontWeight="Bold"
                                    Foreground="{DynamicResource Theme.Brush.Default.Fore}"
                                    ToolTip="{Binding ToCardinalityTooltip}"/>
                     </Border>
                     
-                    <!-- Center indicator panel (for BiDi, M:M, Inactive labels) -->
+                    <!-- Center indicator panel (filter direction and BiDi, M:M, Inactive labels) -->
+                    <!-- Use a Canvas to position, then RenderTransform to center the border on the point -->
                     <Border Canvas.Left="{Binding LabelX}"
                             Canvas.Top="{Binding LabelY}"
-                            Margin="-20,-10,0,0"
                             Background="{DynamicResource Theme.Brush.Content.Back}"
                             CornerRadius="3"
-                            Padding="2,1"
+                            Padding="3,2"
                             BorderThickness="1"
                             BorderBrush="#888888"
-                            Visibility="{Binding HasCenterIndicators, Converter={StaticResource BoolToVisibilityConverter}}">
-                        <StackPanel Orientation="Horizontal">
-                            <!-- Bi-directional indicator -->
-                            <TextBlock Text="BiDi"
-                                       FontSize="9"
-                                       FontWeight="SemiBold"
-                                       Foreground="#4CAF50"
-                                       Margin="0,0,2,0"
-                                       ToolTip="Bi-directional cross-filtering"
-                                       Visibility="{Binding IsBidirectional, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                            RenderTransformOrigin="0,0"
+                            Visibility="{Binding HasValidPositions, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <Border.RenderTransform>
+                            <!-- Use a binding-friendly approach: translate by half width/height -->
+                            <TranslateTransform X="-15" Y="-10"/>
+                        </Border.RenderTransform>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <!-- Reverse filter direction chevrons (for BiDi - pointing toward To table) -->
+                            <Grid Width="14" Height="14" Margin="0,0,0,0"
+                                  Visibility="{Binding IsBidirectional, Converter={StaticResource BoolToVisibilityConverter}}"
+                                  ToolTip="Filter flows both directions (bi-directional)">
+                                <Grid.RenderTransform>
+                                    <RotateTransform Angle="{Binding ReverseFilterDirectionAngle}" CenterX="7" CenterY="7"/>
+                                </Grid.RenderTransform>
+                                <!-- Double chevron pointing right >> (rotated for reverse) -->
+                                <Path Data="M 2,3 L 7,7 L 2,11 M 6,3 L 11,7 L 6,11" 
+                                      Stroke="#555555"
+                                      StrokeThickness="1.5"
+                                      StrokeLineJoin="Round"/>
+                            </Grid>
+                            <!-- Filter direction chevrons (pointing toward From table) -->
+                            <Grid Width="14" Height="14" Margin="0,0,2,0"
+                                  ToolTip="Filter direction">
+                                <Grid.RenderTransform>
+                                    <RotateTransform Angle="{Binding FilterDirectionAngle}" CenterX="7" CenterY="7"/>
+                                </Grid.RenderTransform>
+                                <!-- Double chevron pointing right >> -->
+                                <Path Data="M 2,3 L 7,7 L 2,11 M 6,3 L 11,7 L 6,11" 
+                                      Stroke="#555555"
+                                      StrokeThickness="1.5"
+                                      StrokeLineJoin="Round"/>
+                            </Grid>
                             <!-- Many-to-Many indicator -->
                             <TextBlock Text="M:M"
                                        FontSize="9"
                                        FontWeight="SemiBold"
                                        Foreground="#E91E63"
+                                       VerticalAlignment="Center"
                                        Margin="0,0,2,0"
                                        ToolTip="Many-to-Many relationship"
                                        Visibility="{Binding IsManyToMany, Converter={StaticResource BoolToVisibilityConverter}}"/>
@@ -471,6 +494,7 @@
                                        FontSize="9"
                                        FontStyle="Italic"
                                        Foreground="#999999"
+                                       VerticalAlignment="Center"
                                        ToolTip="This relationship is inactive"
                                        Visibility="{Binding IsInactive, Converter={StaticResource BoolToVisibilityConverter}}"/>
                         </StackPanel>
