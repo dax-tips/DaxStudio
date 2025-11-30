@@ -42,8 +42,8 @@ namespace DaxStudio.Common
         
         private static Regex regexGuid = new Regex(@"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", RegexOptions.Compiled | RegexOptions.IgnoreCase);
         //private static string Instance = "https://login.microsoftonline.com/common/oauth2/nativeclient";
-        private static IEnumerable<string> powerbiScope = new List<string>() { "https://analysis.windows.net/powerbi/api/.default" };
-        private static IEnumerable<string> asazureScope = new List<string>() { "https://*.asazure.windows.net/.default" };
+        private static readonly string[] powerbiScope = new [] { "https://analysis.windows.net/powerbi/api/.default" };
+        private static readonly string[] asazureScope = new [] { "https://*.asazure.windows.net/.default" };
 
         public static async Task<AuthenticationResult> AcquireTokenAsync(IntPtr? hwnd, IHaveLastUsedUPN options, AccessTokenScope tokenScope,AccessTokenContext context)
         {
@@ -223,7 +223,7 @@ namespace DaxStudio.Common
                 if (embeddedSecurityConfig == null)
                 {
                     Assembly executingAssembly = Assembly.GetExecutingAssembly();
-                    using (Stream manifestResourceStream = executingAssembly.GetManifestResourceStream(((IEnumerable<string>)executingAssembly.GetManifestResourceNames()).FirstOrDefault<string>((Func<string, bool>)(name => name.EndsWith("ASAzureSecurityConfig.xml")))))
+                    using (Stream manifestResourceStream = executingAssembly.GetManifestResourceStream(((IEnumerable<string>)executingAssembly.GetManifestResourceNames()).FirstOrDefault<string>((Func<string, bool>)(name => name.EndsWith("ASAzureSecurityConfig.xml",StringComparison.InvariantCultureIgnoreCase)))))
                         embeddedSecurityConfig = DeserializeAuthenticationInformation(manifestResourceStream);
                 }
                 return embeddedSecurityConfig;
@@ -475,7 +475,7 @@ namespace DaxStudio.Common
             }
             catch (MsalUiRequiredException)
             {
-                Log.Warning(Constants.LogMessageTemplate, nameof(EntraIdHelper), nameof(RefreshToken), "User not found in cache, prompting user to sign-in interactively");
+                Log.Warning(Constants.LogMessageTemplate, nameof(EntraIdHelper), nameof(RefreshTokenInternalAsync), "User not found in cache, prompting user to sign-in interactively");
 
                 try
                 {
@@ -490,24 +490,24 @@ namespace DaxStudio.Common
                 }
                 catch (MsalException msalex)
                 {
-                    Log.Error(msalex, Constants.LogMessageTemplate, nameof(EntraIdHelper), nameof(RefreshToken), "Error Acquiring Token Interactively");
+                    Log.Error(msalex, Constants.LogMessageTemplate, nameof(EntraIdHelper), nameof(RefreshTokenInternalAsync), "Error Acquiring Token Interactively");
                 }
             }
             catch (Exception ex)
             {
-                Log.Error(ex, Constants.LogMessageTemplate, nameof(EntraIdHelper), nameof(RefreshToken), "Error Acquiring Token Silently");
+                Log.Error(ex, Constants.LogMessageTemplate, nameof(EntraIdHelper), nameof(RefreshTokenInternalAsync), "Error Acquiring Token Silently");
             }
 
             // TODO - not sure if this is the correct way to refresh the token
             return authResult;
         }
 
-        private static IEnumerable<string> GetScope(TokenDetails tokenDetails)
+        private static string[] GetScope(TokenDetails tokenDetails)
         {
             return GetScope(tokenDetails.UserContext.TokenScope);
         }
 
-        private static IEnumerable<string> GetScope(AccessTokenScope scope)
+        private static string[] GetScope(AccessTokenScope scope)
         {
             if (scope == AccessTokenScope.AsAzure)
                 return asazureScope;

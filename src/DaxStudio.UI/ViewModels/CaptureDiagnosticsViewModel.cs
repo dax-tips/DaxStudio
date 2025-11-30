@@ -4,6 +4,7 @@ using DaxStudio.Interfaces;
 using DaxStudio.UI.Events;
 using DaxStudio.UI.Interfaces;
 using DaxStudio.UI.Model;
+using DaxStudio.UI.ResultsTargets;
 using Microsoft.Win32;
 using Serilog;
 using System;
@@ -15,7 +16,6 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using DaxStudio.UI.ResultsTargets;
 using System.Windows;
 using TaskExtensions = DaxStudio.UI.Extensions.TaskExtensions;
 
@@ -31,13 +31,47 @@ namespace DaxStudio.UI.ViewModels
         public long CPUDuration { get; set; }
     }
 
+    /// <summary>
+    /// Represents the overall state of the capture operation
+    /// </summary>
+    public enum CaptureState
+    {
+        Idle,
+        CapturingMetrics,
+        StartingTraces,
+        RunningQuery,
+        SavingResults,
+        Completed,
+        Failed,
+        Cancelled
+    }
+
+    /// <summary>
+    /// Flags to track the status of individual trace operations
+    /// </summary>
+    [Flags]
+    public enum CaptureDiagnosticTraceStatus
+    {
+        None = 0,
+        ServerTimingsStarted = 1,
+        QueryPlanStarted = 2,
+        ServerTimingsComplete = 4,
+        QueryPlanComplete = 8,
+        ServerTimingsStopped = 16,
+        QueryPlanStopped = 32,
+        AllTracesStarted = ServerTimingsStarted | QueryPlanStarted,
+        AllTracesComplete = ServerTimingsComplete | QueryPlanComplete,
+        AllTracesStopped = ServerTimingsStopped | QueryPlanStopped
+    }
+
     class CaptureDiagnosticsViewModel: BaseDialogViewModel,
         IHandle<ViewMetricsCompleteEvent>,
         IHandle<TraceChangedEvent>,
         IHandle<QueryTraceCompletedEvent>,
         IHandle<QueryFinishedEvent>,
         IHandle<NoQueryTextEvent>,
-        IHandle<DocumentActivatedEvent>
+        IHandle<DocumentActivatedEvent>,
+        IDisposable
     {
 
         public enum OperationStatus
@@ -54,7 +88,7 @@ namespace DaxStudio.UI.ViewModels
             Options = options;
             EventAggregator = eventAggregator;
 
-            if (Ribbon.ActiveDocument.EditorText.Any())
+            if (Ribbon.ActiveDocument.EditorText.Length > 0)
                 SelectedQuerySource = new CaptureDiagnosticsSource(DiagnosticSources.ActiveDocument, new List<IQueryTextProvider>() { this.Ribbon.ActiveDocument });
             else
                 SelectedQuerySource = new CaptureDiagnosticsSource(DiagnosticSources.Clipboard, new List<IQueryTextProvider>() { new ClipboardTextProvider() });
@@ -63,7 +97,7 @@ namespace DaxStudio.UI.ViewModels
             _selectedResultsTarget = Ribbon.SelectedTarget;
 
             // Check if we have any query text or if the query builder is open and populated
-            if(SelectedQuerySource.Queries.FirstOrDefault().EditorText.Any()
+            if(SelectedQuerySource.Queries.FirstOrDefault().EditorText.Length > 0
             || (SelectedQuerySource.Queries.FirstOrDefault().GetType() == typeof(DocumentViewModel) 
                 && Ribbon.ActiveDocument.QueryBuilder.IsVisible 
                 && Ribbon.ActiveDocument.QueryBuilder.Columns.Count > 0))
@@ -135,51 +169,39 @@ namespace DaxStudio.UI.ViewModels
         #region Properties
         private bool _serverTimingsChecked;
         private bool _queryPlanChecked;
-
-        private bool _isMetricsRunning;
-        private bool _isServerTimingsStarting;
-        private bool _isQueryPlanStarting;
-        private bool _isQueryRunning;
-        private bool _isSaveAsRunning;
-        private bool _captureComplete;
         private DocumentViewModel _newDocument;
         private List<TimingRecord> _timingRecords = new List<TimingRecord>();
 
-        public bool IsMetricsRunning { get => _isMetricsRunning;
-            set { 
-                _isMetricsRunning = value;
-                NotifyOfPropertyChange(() => IsMetricsRunning);
-            } 
+        private CaptureState _currentState = CaptureState.Idle;
+        public CaptureState CurrentState
+        {
+            get => _currentState;
+            private set
+            {
+                if (_currentState != value)
+                {
+                    _currentState = value;
+                    NotifyOfPropertyChange();
+                    // Notify all derived properties
+                    NotifyOfPropertyChange(nameof(IsMetricsRunning));
+                    NotifyOfPropertyChange(nameof(IsServerTimingsStarting));
+                    NotifyOfPropertyChange(nameof(IsQueryPlanStarting));
+                    NotifyOfPropertyChange(nameof(IsQueryRunning));
+                    NotifyOfPropertyChange(nameof(IsSaveAsRunning));
+                }
+            }
         }
-        public bool IsServerTimingsStopped { get; set; }
-        public bool IsQueryPlanStopped { get; set; }
-        public bool IsServerTimingsStarting { get => _isServerTimingsStarting;
-            set { 
-                _isServerTimingsStarting = value;
-                NotifyOfPropertyChange(nameof(IsServerTimingsStarting));
-            } 
-        }
-        public bool IsQueryPlanStarting { get => _isQueryPlanStarting;
-            set { 
-                _isQueryPlanStarting = value;
-                NotifyOfPropertyChange(nameof(IsQueryPlanStarting));
-            } 
-        }
-        public bool IsQueryRunning { get => _isQueryRunning;
-            set { 
-                _isQueryRunning = value;
-                NotifyOfPropertyChange();
-            } 
-        }
+
+        // Computed properties derived from CurrentState for UI binding
+        public bool IsMetricsRunning => CurrentState == CaptureState.CapturingMetrics;
+        public bool IsServerTimingsStarting => CurrentState == CaptureState.StartingTraces && !HasTraceFlag(CaptureDiagnosticTraceStatus.ServerTimingsStarted);
+        public bool IsQueryPlanStarting => CurrentState == CaptureState.StartingTraces && !HasTraceFlag(CaptureDiagnosticTraceStatus.QueryPlanStarted);
+        public bool IsQueryRunning => CurrentState == CaptureState.RunningQuery;
+        public bool IsSaveAsRunning => CurrentState == CaptureState.SavingResults;
+        public bool IsServerTimingsStopped => HasTraceFlag(CaptureDiagnosticTraceStatus.ServerTimingsStopped);
+        public bool IsQueryPlanStopped => HasTraceFlag(CaptureDiagnosticTraceStatus.QueryPlanStopped);
 
         private IResultsTarget _selectedResultsTarget;
-
-        public bool IsSaveAsRunning { get => _isSaveAsRunning;
-            set { 
-                _isSaveAsRunning = value;
-                NotifyOfPropertyChange();
-            } 
-        }
 
         public string MetricsStatusImage => GetOperationStatusImage(MetricsStatus);
         public string ServerTimingsStatusImage => GetOperationStatusImage(ServerTimingsStatus);
@@ -304,18 +326,18 @@ namespace DaxStudio.UI.ViewModels
         } 
         public void Cancel()
         {
-            if (IsQueryRunning)
+            if (CurrentState == CaptureState.RunningQuery)
             {
                 Ribbon.CancelQuery();
-                IsQueryRunning = false;
                 QueryStatus = OperationStatus.Failed;
             }
+            CurrentState = CaptureState.Cancelled;
             ResetState();
         }
 
         public async Task CaptureMetricsAsync()
         {
-            IsMetricsRunning = true;
+            CurrentState = CaptureState.CapturingMetrics;
             // store the current setting and turn on the capturing of TOM
             _includeTOM = Options.VpaxIncludeTom;
             Options.VpaxIncludeTom = true;
@@ -325,8 +347,7 @@ namespace DaxStudio.UI.ViewModels
 
         private async Task StartTracesAsync()
         {
-            IsServerTimingsStarting = true;
-            IsQueryPlanStarting = true;
+            CurrentState = CaptureState.StartingTraces;
             Log.Debug(Common.Constants.LogMessageTemplate, nameof(CaptureDiagnosticsViewModel), nameof(StartTracesAsync), "Starting QueryPlan and ServerTimings traces");
             try
             {
@@ -355,102 +376,91 @@ namespace DaxStudio.UI.ViewModels
 
         public async Task HandleAsync(ViewMetricsCompleteEvent message, CancellationToken cancellationToken)
         {
-            IsMetricsRunning = false;
             MetricsStatus = OperationStatus.Succeeded;
             Options.VpaxIncludeTom = _includeTOM;  //reset the include TOM setting
             await StartTracesAsync();
-
         }
 
         private readonly SemaphoreSlim _traceEventLock = new SemaphoreSlim(1, 1);
 
         public async Task HandleAsync(TraceChangedEvent message, CancellationToken cancellationToken)
         {
-            bool _tracesStarted;
-            bool _tracesWaiting;
-
             await _traceEventLock.WaitAsync(cancellationToken);
             try
             {
-                // Critical section
-            
                 switch (message.TraceStatus)
                 {
                     case QueryTrace.Interfaces.QueryTraceStatus.Started:
-
                         if (message.Sender is QueryPlanTraceViewModel)
                         {
-                            IsQueryPlanStarting = false;
+                            SetTraceFlag(CaptureDiagnosticTraceStatus.QueryPlanStarted);
                             QueryPlanStatus = OperationStatus.Succeeded;
                         }
                         if (message.Sender is ServerTimesViewModel)
                         {
-                            IsServerTimingsStarting = false;
+                            SetTraceFlag(CaptureDiagnosticTraceStatus.ServerTimingsStarted);
                             ServerTimingsStatus = OperationStatus.Succeeded;
                         }
-
                         break;
-                    case QueryTrace.Interfaces.QueryTraceStatus.Error:
 
+                    case QueryTrace.Interfaces.QueryTraceStatus.Error:
                         if (message.Sender is QueryPlanTraceViewModel)
                         {
-                            IsQueryPlanStarting = false;
                             QueryPlanStatus = OperationStatus.Failed;
                         }
                         if (message.Sender is ServerTimesViewModel)
                         {
-                            IsServerTimingsStarting = false;
                             ServerTimingsStatus = OperationStatus.Failed;
                         }
                         break;
-                    case QueryTrace.Interfaces.QueryTraceStatus.Stopped:
 
+                    case QueryTrace.Interfaces.QueryTraceStatus.Stopped:
                         if (message.Sender is QueryPlanTraceViewModel)
                         {
-                            IsQueryPlanStopped = true;
-                            
+                            SetTraceFlag(CaptureDiagnosticTraceStatus.QueryPlanStopped);
                         }
                         if (message.Sender is ServerTimesViewModel)
                         {
-                            IsServerTimingsStopped = true;
-                            
+                            SetTraceFlag(CaptureDiagnosticTraceStatus.ServerTimingsStopped);
                         }
                         break;
+
                     default:
-                        // ignore any other status change events
                         return;
                 }
-                _tracesStarted = QueryPlanStatus == OperationStatus.Succeeded 
-                                && ServerTimingsStatus == OperationStatus.Succeeded ;
-                _tracesWaiting = QueryPlanStatus == OperationStatus.Waiting
-                                || ServerTimingsStatus == OperationStatus.Waiting;
-
             }
             finally
             {
                 _traceEventLock.Release();
             }
 
-            if (_tracesStarted && !_captureComplete)
+            // Check if we should proceed to run the query
+            bool tracesWaiting = QueryPlanStatus == OperationStatus.Waiting || ServerTimingsStatus == OperationStatus.Waiting;
+            
+            if (AllTracesStarted && CurrentState == CaptureState.StartingTraces)
             {
                 await RunQueryAsync();
             }
-            if (!_tracesStarted && !_tracesWaiting)
+            else if (!AllTracesStarted && !tracesWaiting && CurrentState == CaptureState.StartingTraces)
             {
                 SkipQuery();
             }
-            if (hasNewDocument && _captureComplete && IsServerTimingsStopped && IsQueryPlanStopped)
+            
+            // Clean up new document when capture is complete and traces have stopped
+            if (hasNewDocument && CurrentState == CaptureState.Completed && AllTracesStopped)
             {
                 _newDocument.IsDirty = false;
                 await _newDocument.TryCloseAsync(); 
                 hasNewDocument = false;
             }
-            
         }
 
         private async Task RunQueryAsync()
         {
-            IsQueryRunning = true;
+            // Prevent running the query if not in the correct state
+            if (CurrentState != CaptureState.StartingTraces) return;
+            
+            CurrentState = CaptureState.RunningQuery;
 
             // set the run style to run and clear the cache
             var runStyle = new RunStyle("Run", RunStyleIcons.RunOnly, string.Empty);
@@ -471,43 +481,82 @@ namespace DaxStudio.UI.ViewModels
             QueryStatus = OperationStatus.Skipped;
             SaveAsStatus = OperationStatus.Skipped;
             OverallStatus = "Failed to capture full diagnostics check the log window for errors";
+            CurrentState = CaptureState.Failed;
             CanClose = true;
         }
-        private bool _serverTimingsComplete = false;
-        private bool _queryPlanComplete = false;
+
+        private CaptureDiagnosticTraceStatus _traceStatus = CaptureDiagnosticTraceStatus.None;
+        private void SetTraceFlag(CaptureDiagnosticTraceStatus flag)
+        {
+            _traceStatus |= flag;
+            // Notify UI of changes to computed properties that depend on flags
+            NotifyOfPropertyChange(nameof(IsServerTimingsStarting));
+            NotifyOfPropertyChange(nameof(IsQueryPlanStarting));
+            NotifyOfPropertyChange(nameof(IsServerTimingsStopped));
+            NotifyOfPropertyChange(nameof(IsQueryPlanStopped));
+        }
+        private void ClearTraceFlag(CaptureDiagnosticTraceStatus flag)
+        {
+            _traceStatus &= ~flag;
+            NotifyOfPropertyChange(nameof(IsServerTimingsStarting));
+            NotifyOfPropertyChange(nameof(IsQueryPlanStarting));
+            NotifyOfPropertyChange(nameof(IsServerTimingsStopped));
+            NotifyOfPropertyChange(nameof(IsQueryPlanStopped));
+        }
+        private bool HasTraceFlag(CaptureDiagnosticTraceStatus flag) => (_traceStatus & flag) == flag;
+        private bool AllTracesStarted => HasTraceFlag(CaptureDiagnosticTraceStatus.AllTracesStarted);
+        private bool AllTracesComplete => HasTraceFlag(CaptureDiagnosticTraceStatus.AllTracesComplete);
+        private bool AllTracesStopped => HasTraceFlag(CaptureDiagnosticTraceStatus.AllTracesStopped);
+
         public async Task HandleAsync(QueryTraceCompletedEvent message, CancellationToken cancellationToken)
         {
             var trace = message.Trace as IHaveData;
             if (trace == null) { return; }
 
-            if (trace is ServerTimesViewModel serverTimings && trace.HasData) {
-                _serverTimingsComplete = true;
-                _timingRecords.Add(new TimingRecord()
+            if (trace is ServerTimesViewModel serverTimings) {
+                SetTraceFlag(CaptureDiagnosticTraceStatus.ServerTimingsComplete);
+                if (trace.HasData)
                 {
-                    QueryName = $"Query{CurrentQueryNumber}",
-                    TotalDurationMs = serverTimings.TotalDuration,
-                    FEDurationMs = serverTimings.FormulaEngineDuration,
-                    SEDurationMs = serverTimings.StorageEngineDuration,
-                    SEQueries = serverTimings.StorageEngineQueryCount
-                });
+                    _timingRecords.Add(new TimingRecord()
+                    {
+                        QueryName = $"Query{CurrentQueryNumber}",
+                        TotalDurationMs = serverTimings.TotalDuration,
+                        FEDurationMs = serverTimings.FormulaEngineDuration,
+                        SEDurationMs = serverTimings.StorageEngineDuration,
+                        SEQueries = serverTimings.StorageEngineQueryCount
+                    });
+                }
+                else
+                {
+                    Log.Warning(Common.Constants.LogMessageTemplate, nameof(CaptureDiagnosticsViewModel), nameof(HandleAsync), "ServerTimings trace completed but HasData is false");
+                }
             }
 
-            if (trace is QueryPlanTraceViewModel && trace.HasData) _queryPlanComplete = true;
+            if (trace is QueryPlanTraceViewModel) {
+                SetTraceFlag(CaptureDiagnosticTraceStatus.QueryPlanComplete);
+                if (!trace.HasData)
+                {
+                    Log.Warning(Common.Constants.LogMessageTemplate, nameof(CaptureDiagnosticsViewModel), nameof(HandleAsync), "QueryPlan trace completed but HasData is false");
+                }
+            }
 
-            if (_serverTimingsComplete && _queryPlanComplete)
+            if (AllTracesComplete)
             {
                 if (TotalQueries > 1) { await SaveTempFileAsync(); }
                 
                 if (CurrentQueryNumber < TotalQueries) {
-                    _serverTimingsComplete = false;
-                    _queryPlanComplete = false;
-                    CurrentQueryNumber++;
+                    // Reset trace completion flags for next query
+                    ClearTraceFlag(CaptureDiagnosticTraceStatus.AllTracesComplete);
+                    // Transition back to StartingTraces to allow RunQueryAsync
+                    CurrentState = CaptureState.StartingTraces;
+                    CurrentQueryNumber++;;
                     await RunQueryAsync();
                 }
-            };
-
-            if (_serverTimingsComplete && _queryPlanComplete && CurrentQueryNumber >= TotalQueries) 
-                await SaveAndExitAsync();
+                else
+                {
+                    await SaveAndExitAsync();
+                }
+            }
 
             return;
         }
@@ -549,19 +598,18 @@ namespace DaxStudio.UI.ViewModels
 
         public Task SaveAndExitAsync()
         {
-            IsQueryRunning = false;
+            CurrentState = CaptureState.SavingResults;
             QueryStatus = OperationStatus.Succeeded;
-            IsSaveAsRunning = true;
             
             if (TotalQueries == 1)
                 Ribbon.SaveAsDaxx();
             else
                 SaveZip();
-            IsSaveAsRunning = false;
+
             SaveAsStatus = OperationStatus.Succeeded;
             CanClose = true;
             CanCancel = false;
-            _captureComplete = true;
+            CurrentState = CaptureState.Completed;
             if (_queryPlanTrace != null) _queryPlanTrace.IsChecked = false;
             if (_serverTimingsTrace != null) _serverTimingsTrace.IsChecked = false;
             ResetState();
@@ -659,9 +707,9 @@ namespace DaxStudio.UI.ViewModels
         {
             if (!message?.Successful??false)
             {
-                IsQueryRunning = false;
                 QueryStatus = OperationStatus.Failed;
                 SaveAsStatus = OperationStatus.Failed;
+                CurrentState = CaptureState.Failed;
                 ResetState();
                 CanCancel = false;
                 CanClose = true;
@@ -671,7 +719,7 @@ namespace DaxStudio.UI.ViewModels
 
         public async Task HandleAsync(DocumentActivatedEvent message, CancellationToken cancellationToken)
         {
-            if (_captureComplete) return;
+            if (CurrentState == CaptureState.Completed) return;
             // if a new window has been opened use that to capture the VPAX metrics
             if (message.Document.IsConnected)
             {
@@ -699,6 +747,8 @@ namespace DaxStudio.UI.ViewModels
         }
         public int TotalQueries => SelectedQuerySource?.Queries?.Count()??0;
         private int _currentQueryNumber = 1;
+        private bool disposedValue;
+
         public int CurrentQueryNumber { get => _currentQueryNumber;
             private set {
                 _currentQueryNumber = value;
@@ -713,5 +763,35 @@ namespace DaxStudio.UI.ViewModels
         }
 
         public double ProgressPercentage =>  ((double)CurrentQueryNumber / (double)TotalQueries) *100;
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!disposedValue)
+            {
+                if (disposing)
+                {
+                    // TODO: dispose managed state (managed objects)
+                    _traceEventLock?.Dispose();
+                }
+
+                // TODO: free unmanaged resources (unmanaged objects) and override finalizer
+                // TODO: set large fields to null
+                disposedValue = true;
+            }
+        }
+
+        // // TODO: override finalizer only if 'Dispose(bool disposing)' has code to free unmanaged resources
+        // ~CaptureDiagnosticsViewModel()
+        // {
+        //     // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
+        //     Dispose(disposing: false);
+        // }
+
+        public void Dispose()
+        {
+            // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
+            Dispose(disposing: true);
+            GC.SuppressFinalize(this);
+        }
     }
 }

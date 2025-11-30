@@ -26,7 +26,9 @@
             <local:BoolToHiddenConverter x:Key="BoolToHiddenConverter"/>
             <local:BoolToNotHiddenConverter x:Key="BoolToNotHiddenConverter"/>
             <avalonDockConverters:ActivateCommandLayoutItemFromLayoutModelConverter x:Key="ActivateCommandLayoutItemFromLayoutModelConverter" />
-            <ui:BindingProxy x:Key="Proxy"  Value="{Binding}" />
+            <!-- Ensure Proxy.Value is never null by binding to the UserControl itself -->
+            <ui:BindingProxy x:Key="Proxy"
+                             Value="{Binding RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}" />
 
             <Style x:Key="CloseButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
@@ -615,8 +617,19 @@
                     <MenuItem
 			Command="{Binding Path=CloseCommand}"
 			Header="{x:Static avalonDockProperties:Resources.Document_Close}"
-			Visibility="{Binding Path=IsEnabled, RelativeSource={RelativeSource Self}, Mode=OneWay, Converter={avalonDockConverters:BoolToVisibilityConverter}}" />
-                    <MenuItem Command="{Binding Path=CloseAllButThisCommand}" Header="{x:Static avalonDockProperties:Resources.Document_CloseAllButThis}" />
+			Visibility="{Binding Path=IsEnabled,
+                           RelativeSource={RelativeSource Self},
+                           Mode=OneWay,
+                           Converter={avalonDockConverters:BoolToVisibilityConverter},
+                           TargetNullValue=Collapsed,
+                           FallbackValue=Collapsed}" />
+                    <MenuItem Command="{Binding Path=CloseAllButThisCommand}"
+                              Header="{x:Static avalonDockProperties:Resources.Document_CloseAllButThis}"
+                              Visibility="{Binding Path=IsEnabled,
+                                   RelativeSource={RelativeSource Self},
+                                   Mode=OneWay,
+                                   TargetNullValue=Collapsed,
+                                   FallbackValue=Collapsed}" />
                     <MenuItem Command="{Binding Path=CloseAllCommand}" Header="{x:Static avalonDockProperties:Resources.Document_CloseAll}" />
                     <MenuItem Command="{Binding Path=FloatCommand}" Header="{x:Static avalonDockProperties:Resources.Document_Float}" />
                     <MenuItem Command="{Binding Path=DockAsDocumentCommand}" Header="{x:Static avalonDockProperties:Resources.Document_DockAsDocument}" />

@@ -653,7 +653,7 @@ namespace DaxStudio.UI.ViewModels
                 var dependentMeasures = FindDependentMeasures(column.Name);
                 foreach (var measure in dependentMeasures)
                 {
-                    EventAggregator.PublishOnUIThreadAsync(new DefineMeasureOnEditor(measure.DaxName, measure.Expression, null, null));
+                    EventAggregator.PublishOnUIThreadAsync(new DefineMeasureOnEditor(measure));
                 }
             }
             catch (Exception ex)
