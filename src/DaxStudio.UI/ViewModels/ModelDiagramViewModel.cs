@@ -281,28 +281,73 @@ namespace DaxStudio.UI.ViewModels
         /// </summary>
         private void ApplyTableFilter()
         {
+            // Pre-calculate table roles for filtering
+            var tableRoles = GetTableRoles();
+            
             foreach (var table in Tables)
             {
+                var role = tableRoles.TryGetValue(table.TableName, out var r) ? r : TableRole.Standalone;
+                
                 switch (_tableFilter)
                 {
                     case 0: // All tables
                         table.IsHidden = false;
                         break;
-                    case 1: // Fact tables (tables with relationships to many tables, usually have many columns)
-                        table.IsHidden = table.IsDateTable || (table.MeasureCount > 0 && table.ColumnCount == 0);
+                    case 1: // Fact tables - tables primarily on the "many" side of relationships
+                        table.IsHidden = role != TableRole.Fact;
                         break;
-                    case 2: // Dimension tables (non-date, non-measure tables)
-                        table.IsHidden = table.IsDateTable || (table.MeasureCount > 0 && table.ColumnCount == 0);
+                    case 2: // Dimension tables - tables primarily on the "one" side of relationships
+                        table.IsHidden = role != TableRole.Dimension && !table.IsDateTable;
                         break;
                     case 3: // Date tables only
                         table.IsHidden = !table.IsDateTable;
                         break;
-                    case 4: // Measure tables only
+                    case 4: // Measure tables only (tables with only measures, no data columns)
                         table.IsHidden = !(table.MeasureCount > 0 && table.ColumnCount == 0);
                         break;
                 }
             }
             RefreshLayout();
+        }
+        
+        /// <summary>
+        /// Gets table roles based on relationship cardinality.
+        /// Fact tables are on the "many" side, Dimension tables are on the "one" side.
+        /// </summary>
+        private Dictionary<string, TableRole> GetTableRoles()
+        {
+            var roles = new Dictionary<string, TableRole>(StringComparer.OrdinalIgnoreCase);
+            
+            foreach (var table in Tables)
+            {
+                int manySideCount = 0;
+                int oneSideCount = 0;
+                
+                foreach (var rel in Relationships)
+                {
+                    if (rel.FromTable.Equals(table.TableName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (rel.FromCardinality == "*") manySideCount++;
+                        else oneSideCount++;
+                    }
+                    else if (rel.ToTable.Equals(table.TableName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (rel.ToCardinality == "*") manySideCount++;
+                        else oneSideCount++;
+                    }
+                }
+                
+                if (manySideCount == 0 && oneSideCount == 0)
+                    roles[table.TableName] = TableRole.Standalone;
+                else if (manySideCount > oneSideCount)
+                    roles[table.TableName] = TableRole.Fact;
+                else if (oneSideCount > manySideCount)
+                    roles[table.TableName] = TableRole.Dimension;
+                else
+                    roles[table.TableName] = TableRole.Bridge;
+            }
+            
+            return roles;
         }
 
         private bool _snapToGrid = false;
@@ -533,6 +578,12 @@ namespace DaxStudio.UI.ViewModels
                         {
                             var relVm = new ModelDiagramRelationshipViewModel(rel, fromTableVm, toTableVm);
                             Relationships.Add(relVm);
+                            
+                            // Mark columns as relationship columns
+                            var fromCol = fromTableVm.Columns.FirstOrDefault(c => c.ColumnName == rel.FromColumn);
+                            var toCol = toTableVm.Columns.FirstOrDefault(c => c.ColumnName == rel.ToColumn);
+                            if (fromCol != null) fromCol.IsRelationshipColumn = true;
+                            if (toCol != null) toCol.IsRelationshipColumn = true;
                         }
                     }
                 }
@@ -579,11 +630,11 @@ namespace DaxStudio.UI.ViewModels
         {
             if (Tables.Count == 0) return;
 
-            const double tableWidth = 200;
-            const double tableHeight = 180;
-            const double horizontalSpacing = 100;
-            const double verticalSpacing = 80;
-            const double padding = 40;
+            const double tableWidth = 220;
+            const double tableHeight = 200;
+            const double horizontalSpacing = 150;
+            const double verticalSpacing = 120;
+            const double padding = 60;
 
             // Build relationship map and categorize tables
             var relationshipMap = BuildRelationshipMap();
@@ -1840,14 +1891,15 @@ namespace DaxStudio.UI.ViewModels
         public BindableCollection<ModelDiagramColumnViewModel> Columns { get; }
 
         /// <summary>
-        /// Key columns only (for collapsed view).
+        /// Key and relationship columns (for collapsed view).
+        /// Shows columns marked as keys OR columns used in relationships.
         /// </summary>
-        public IEnumerable<ModelDiagramColumnViewModel> KeyColumns => Columns.Where(c => c.IsKey);
+        public IEnumerable<ModelDiagramColumnViewModel> KeyColumns => Columns.Where(c => c.IsKey || c.IsRelationshipColumn);
 
         /// <summary>
-        /// Whether this table has any key columns.
+        /// Whether this table has any key or relationship columns.
         /// </summary>
-        public bool HasKeyColumns => Columns.Any(c => c.IsKey);
+        public bool HasKeyColumns => Columns.Any(c => c.IsKey || c.IsRelationshipColumn);
 
         /// <summary>
         /// Tooltip with table details matching metadata pane style.
@@ -2086,6 +2138,17 @@ namespace DaxStudio.UI.ViewModels
         public ADOTabularObjectType ObjectType => _column.ObjectType;
         public string DataTypeName => _column.DataTypeName;
         public bool IsKey => _column.IsKey;
+        
+        private bool _isRelationshipColumn;
+        /// <summary>
+        /// Whether this column is used in a relationship.
+        /// Set by the parent table when relationships are loaded.
+        /// </summary>
+        public bool IsRelationshipColumn
+        {
+            get => _isRelationshipColumn;
+            set { _isRelationshipColumn = value; NotifyOfPropertyChange(); }
+        }
 
         /// <summary>
         /// Whether this is a measure (vs column/hierarchy).

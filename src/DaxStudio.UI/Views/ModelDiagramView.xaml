@@ -706,11 +706,13 @@
                       VerticalScrollBarVisibility="Auto"
                       PreviewMouseWheel="ScrollViewer_PreviewMouseWheel"
                       Background="{DynamicResource Theme.Brush.Content.Back}">
-            <Grid MinWidth="{Binding ActualWidth, ElementName=MainScrollViewer}"
+            <Grid x:Name="DiagramGrid"
+                  MinWidth="{Binding ActualWidth, ElementName=MainScrollViewer}"
                   MinHeight="{Binding ActualHeight, ElementName=MainScrollViewer}"
                   Width="{Binding CanvasWidth}" 
                   Height="{Binding CanvasHeight}"
-                  Background="{DynamicResource Theme.Brush.Content.Back}">
+                  Background="{DynamicResource Theme.Brush.Content.Back}"
+                  MouseLeftButtonDown="Canvas_MouseLeftButtonDown">
                 <Grid.LayoutTransform>
                     <ScaleTransform x:Name="CanvasScaleTransform" ScaleX="1" ScaleY="1"/>
                 </Grid.LayoutTransform>

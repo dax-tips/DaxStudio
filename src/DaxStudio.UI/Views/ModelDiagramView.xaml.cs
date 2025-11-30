@@ -699,6 +699,25 @@ namespace DaxStudio.UI.Views
             }
         }
 
+        /// <summary>
+        /// Handles left-click on the canvas background to clear selection.
+        /// </summary>
+        private void Canvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            // Only clear if clicking directly on the canvas (not on a table or relationship)
+            if (e.OriginalSource is FrameworkElement element)
+            {
+                // Check if we clicked on the background Grid itself
+                if (element.Name == "DiagramGrid" || element.DataContext == DataContext)
+                {
+                    if (DataContext is ModelDiagramViewModel vm)
+                    {
+                        vm.ClearSelection();
+                    }
+                }
+            }
+        }
+
         #endregion
 
         #region Mini-Map
