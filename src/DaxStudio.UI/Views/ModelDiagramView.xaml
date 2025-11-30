@@ -33,6 +33,16 @@
             <!-- Table Card Template -->
             <DataTemplate x:Key="TableCardTemplate" DataType="{x:Type vm:ModelDiagramTableViewModel}">
                 <Grid Width="{Binding Width}" Height="{Binding Height}" MinWidth="150" MinHeight="80">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Visibility" Value="Visible"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsHidden}" Value="True">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
                     <Border x:Name="TableBorder"
                             CornerRadius="4"
                             Background="{DynamicResource Theme.Brush.Content.Back}"
@@ -227,7 +237,55 @@
                             </StackPanel>
                         </Border>
                         
-                        <!-- Columns List (collapsible) -->
+                        <!-- Key Columns (shown when collapsed) -->
+                        <Border Grid.Row="2" 
+                                CornerRadius="0,0,4,4"
+                                Background="{DynamicResource Theme.Brush.Content.Back}"
+                                Padding="4,2">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding IsCollapsed}" Value="True"/>
+                                                <Condition Binding="{Binding HasKeyColumns}" Value="True"/>
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <ItemsControl ItemsSource="{Binding KeyColumns}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type vm:ModelDiagramColumnViewModel}">
+                                        <Grid Margin="0,1">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="🔑" FontSize="9" VerticalAlignment="Center" Margin="0,0,2,0"/>
+                                            <Image Grid.Column="1"
+                                                   ap:ImageBindingHelper.SourceResourceKey="{Binding IconResourceKey}"
+                                                   Width="12" Height="12"
+                                                   VerticalAlignment="Center"
+                                                   Margin="0,0,3,0"/>
+                                            <TextBlock Grid.Column="2"
+                                                       Text="{Binding Caption}"
+                                                       FontSize="10"
+                                                       FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                                                       ToolTip="{Binding Tooltip}"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Border>
+                        
+                        <!-- Columns List (hidden when collapsed) -->
                         <Border Grid.Row="2" 
                                 CornerRadius="0,0,4,4"
                                 Background="{DynamicResource Theme.Brush.Content.Back}">
@@ -385,14 +443,27 @@
                         </Style>
                     </Canvas.Style>
                     
+                    <!-- Invisible hit area for clicking (wider than visible line) -->
+                    <Path Data="{Binding PathData}"
+                          Stroke="Transparent"
+                          StrokeThickness="12"
+                          Cursor="Hand"
+                          MouseLeftButtonDown="Relationship_MouseLeftButtonDown"
+                          ToolTip="{Binding Tooltip}"/>
+                    
                     <!-- Relationship Path (main line) -->
                     <Path Data="{Binding PathData}"
                           StrokeThickness="2"
+                          IsHitTestVisible="False"
                           ToolTip="{Binding Tooltip}">
                         <Path.Style>
                             <Style TargetType="Path">
                                 <Setter Property="Stroke" Value="#666666"/>
                                 <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                        <Setter Property="Stroke" Value="#2196F3"/>
+                                        <Setter Property="StrokeThickness" Value="3"/>
+                                    </DataTrigger>
                                     <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
                                         <Setter Property="Stroke" Value="#FF5722"/>
                                         <Setter Property="StrokeThickness" Value="3"/>
@@ -566,10 +637,48 @@
                                   Margin="0,0,8,0"
                                   Padding="8,2"
                                   ToolTip="Show overview mini-map"/>
+                    <ComboBox SelectedIndex="{Binding TableFilter}"
+                              Margin="0,0,4,0"
+                              Padding="4,2"
+                              ToolTip="Filter tables by type">
+                        <ComboBoxItem Content="All Tables"/>
+                        <ComboBoxItem Content="Fact Tables"/>
+                        <ComboBoxItem Content="Dimension Tables"/>
+                        <ComboBoxItem Content="Date Tables"/>
+                        <ComboBoxItem Content="Measure Tables"/>
+                    </ComboBox>
+                    <Button Content="Show All"
+                            cal:Message.Attach="ShowAllTables"
+                            Margin="0,0,8,0"
+                            Padding="8,2"
+                            ToolTip="Show all hidden tables"/>
+                    <Button Content="Auto Layout"
+                            cal:Message.Attach="AutoArrange"
+                            Margin="0,0,8,0"
+                            Padding="8,2"
+                            ToolTip="Automatically arrange tables"/>
                 </StackPanel>
                 
                 <!-- Zoom Controls -->
                 <StackPanel Grid.Column="3" Orientation="Horizontal" Margin="8,0">
+                    <Button Content="-" 
+                            cal:Message.Attach="ZoomOut"
+                            Width="24"
+                            Margin="0,0,2,0"
+                            Padding="4,2"
+                            ToolTip="Zoom out (Ctrl+Mouse wheel)"/>
+                    <TextBlock Text="{Binding Scale, StringFormat='{}{0:P0}'}"
+                               VerticalAlignment="Center"
+                               Width="40"
+                               TextAlignment="Center"
+                               Margin="2,0"
+                               Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
+                    <Button Content="+" 
+                            cal:Message.Attach="ZoomIn"
+                            Width="24"
+                            Margin="0,0,8,0"
+                            Padding="4,2"
+                            ToolTip="Zoom in (Ctrl+Mouse wheel)"/>
                     <Button Content="Fit" 
                             cal:Message.Attach="ZoomToFit"
                             Margin="0,0,4,0"
@@ -577,13 +686,8 @@
                             ToolTip="Zoom to fit all tables"/>
                     <Button Content="100%" 
                             cal:Message.Attach="ResetZoom"
-                            Margin="0,0,4,0"
                             Padding="8,2"
                             ToolTip="Reset zoom to 100%"/>
-                    <TextBlock Text="{Binding Scale, StringFormat='{}{0:P0}'}"
-                               VerticalAlignment="Center"
-                               Margin="4,0"
-                               Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
                 </StackPanel>
                 
                 <!-- Export Button -->
@@ -619,6 +723,14 @@
                         <Separator/>
                         <MenuItem Header="Select All" cal:Message.Attach="SelectAllTables" InputGestureText="Ctrl+A"/>
                         <MenuItem Header="Clear Selection" cal:Message.Attach="ClearSelection" InputGestureText="Esc"/>
+                        <MenuItem Header="Highlight Path Between Tables" cal:Message.Attach="HighlightPath"
+                                  IsEnabled="{Binding CanHighlightPath}"
+                                  InputGestureText="Ctrl+P"
+                                  ToolTip="Select exactly 2 tables to highlight the shortest path between them"/>
+                        <Separator/>
+                        <MenuItem Header="Hide Selected Tables" cal:Message.Attach="HideSelectedTables" InputGestureText="Delete"/>
+                        <MenuItem Header="Show All Tables" cal:Message.Attach="ShowAllTables" 
+                                  ToolTip="Show all hidden tables"/>
                         <Separator/>
                         <MenuItem Header="Layout">
                             <MenuItem Header="Auto Arrange" cal:Message.Attach="AutoArrange" ToolTip="Re-arrange tables using automatic layout"/>
@@ -632,7 +744,9 @@
                         </MenuItem>
                         <Separator/>
                         <MenuItem Header="Zoom">
-                            <MenuItem Header="Zoom to Fit" cal:Message.Attach="ZoomToFit"/>
+                            <MenuItem Header="Zoom to Fit All" cal:Message.Attach="ZoomToFit"/>
+                            <MenuItem Header="Zoom to Selection" cal:Message.Attach="ZoomToSelection" 
+                                      ToolTip="Zoom and center on selected tables"/>
                             <MenuItem Header="Reset to 100%" cal:Message.Attach="ResetZoom"/>
                             <Separator/>
                             <MenuItem Header="50%" cal:Message.Attach="SetZoom(0.5)"/>

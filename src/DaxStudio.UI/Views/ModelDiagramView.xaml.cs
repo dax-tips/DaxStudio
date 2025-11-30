@@ -33,11 +33,13 @@ namespace DaxStudio.UI.Views
                 {
                     oldVm.ExportRequested -= OnExportRequested;
                     oldVm.OnScaleChanged -= OnScaleChanged;
+                    oldVm.OnScrollToRequested -= OnScrollToRequested;
                 }
                 if (e.NewValue is ModelDiagramViewModel newVm)
                 {
                     newVm.ExportRequested += OnExportRequested;
                     newVm.OnScaleChanged += OnScaleChanged;
+                    newVm.OnScrollToRequested += OnScrollToRequested;
                     // Set initial view dimensions
                     UpdateViewDimensions(newVm);
                     // Apply initial scale
@@ -75,6 +77,22 @@ namespace DaxStudio.UI.Views
             if (DataContext is ModelDiagramViewModel vm)
             {
                 UpdateCanvasScale(vm.Scale);
+            }
+        }
+
+        /// <summary>
+        /// Handles scroll requests from the ViewModel.
+        /// </summary>
+        private void OnScrollToRequested(double x, double y)
+        {
+            if (DataContext is ModelDiagramViewModel vm && MainScrollViewer != null)
+            {
+                // Calculate the scroll position to center on the target
+                var scrollX = (x * vm.Scale) - (MainScrollViewer.ViewportWidth / 2);
+                var scrollY = (y * vm.Scale) - (MainScrollViewer.ViewportHeight / 2);
+                
+                MainScrollViewer.ScrollToHorizontalOffset(System.Math.Max(0, scrollX));
+                MainScrollViewer.ScrollToVerticalOffset(System.Math.Max(0, scrollY));
             }
         }
 
@@ -186,6 +204,18 @@ namespace DaxStudio.UI.Views
         {
             if (sender is FrameworkElement element && element.DataContext is ModelDiagramTableViewModel tableVm)
             {
+                // Double-click on table body jumps to Metadata Pane
+                if (e.ClickCount == 2)
+                {
+                    if (DataContext is ModelDiagramViewModel viewModel)
+                    {
+                        viewModel.SelectSingleTable(tableVm);
+                        viewModel.JumpToMetadataPane();
+                    }
+                    e.Handled = true;
+                    return;
+                }
+
                 _coordinateRoot = FindCoordinateRoot(element);
                 if (_coordinateRoot == null) return;
 
@@ -572,19 +602,31 @@ namespace DaxStudio.UI.Views
                 switch (e.Key)
                 {
                     case Key.Left:
-                        vm.NavigateToTable("left");
+                        if (Keyboard.Modifiers == ModifierKeys.Control)
+                            vm.NudgeSelectedTables(-10, 0);
+                        else
+                            vm.NavigateToTable("left");
                         e.Handled = true;
                         break;
                     case Key.Right:
-                        vm.NavigateToTable("right");
+                        if (Keyboard.Modifiers == ModifierKeys.Control)
+                            vm.NudgeSelectedTables(10, 0);
+                        else
+                            vm.NavigateToTable("right");
                         e.Handled = true;
                         break;
                     case Key.Up:
-                        vm.NavigateToTable("up");
+                        if (Keyboard.Modifiers == ModifierKeys.Control)
+                            vm.NudgeSelectedTables(0, -10);
+                        else
+                            vm.NavigateToTable("up");
                         e.Handled = true;
                         break;
                     case Key.Down:
-                        vm.NavigateToTable("down");
+                        if (Keyboard.Modifiers == ModifierKeys.Control)
+                            vm.NudgeSelectedTables(0, 10);
+                        else
+                            vm.NavigateToTable("down");
                         e.Handled = true;
                         break;
                     case Key.Tab:
@@ -595,6 +637,10 @@ namespace DaxStudio.UI.Views
                         vm.ClearSelection();
                         e.Handled = true;
                         break;
+                    case Key.Delete:
+                        vm.HideSelectedTables();
+                        e.Handled = true;
+                        break;
                     case Key.A:
                         if (Keyboard.Modifiers == ModifierKeys.Control)
                         {
@@ -602,7 +648,54 @@ namespace DaxStudio.UI.Views
                             e.Handled = true;
                         }
                         break;
+                    case Key.P:
+                        if (Keyboard.Modifiers == ModifierKeys.Control && vm.CanHighlightPath)
+                        {
+                            vm.HighlightPath();
+                            e.Handled = true;
+                        }
+                        break;
+                    case Key.Add:
+                    case Key.OemPlus:
+                        if (Keyboard.Modifiers == ModifierKeys.Control)
+                        {
+                            vm.ZoomIn();
+                            e.Handled = true;
+                        }
+                        break;
+                    case Key.Subtract:
+                    case Key.OemMinus:
+                        if (Keyboard.Modifiers == ModifierKeys.Control)
+                        {
+                            vm.ZoomOut();
+                            e.Handled = true;
+                        }
+                        break;
+                    case Key.D0:
+                    case Key.NumPad0:
+                        if (Keyboard.Modifiers == ModifierKeys.Control)
+                        {
+                            vm.ResetZoom();
+                            e.Handled = true;
+                        }
+                        break;
                 }
+            }
+        }
+
+        #endregion
+
+        #region Relationship Click Handling
+
+        private void Relationship_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is FrameworkElement element && element.DataContext is ModelDiagramRelationshipViewModel relVm)
+            {
+                if (DataContext is ModelDiagramViewModel vm)
+                {
+                    vm.SelectRelationship(relVm);
+                }
+                e.Handled = true;
             }
         }
 

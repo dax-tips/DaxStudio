@@ -261,6 +261,50 @@ namespace DaxStudio.UI.ViewModels
             }
         }
 
+        private int _tableFilter = 0;
+        /// <summary>
+        /// Filter tables by type: 0=All, 1=Fact, 2=Dimension, 3=Date, 4=Measure
+        /// </summary>
+        public int TableFilter
+        {
+            get => _tableFilter;
+            set
+            {
+                _tableFilter = value;
+                NotifyOfPropertyChange();
+                ApplyTableFilter();
+            }
+        }
+
+        /// <summary>
+        /// Applies the table filter to show/hide tables based on type.
+        /// </summary>
+        private void ApplyTableFilter()
+        {
+            foreach (var table in Tables)
+            {
+                switch (_tableFilter)
+                {
+                    case 0: // All tables
+                        table.IsHidden = false;
+                        break;
+                    case 1: // Fact tables (tables with relationships to many tables, usually have many columns)
+                        table.IsHidden = table.IsDateTable || (table.MeasureCount > 0 && table.ColumnCount == 0);
+                        break;
+                    case 2: // Dimension tables (non-date, non-measure tables)
+                        table.IsHidden = table.IsDateTable || (table.MeasureCount > 0 && table.ColumnCount == 0);
+                        break;
+                    case 3: // Date tables only
+                        table.IsHidden = !table.IsDateTable;
+                        break;
+                    case 4: // Measure tables only
+                        table.IsHidden = !(table.MeasureCount > 0 && table.ColumnCount == 0);
+                        break;
+                }
+            }
+            RefreshLayout();
+        }
+
         private bool _snapToGrid = false;
         /// <summary>
         /// Whether to snap table positions to a grid when dragging.
@@ -333,14 +377,39 @@ namespace DaxStudio.UI.ViewModels
         /// </summary>
         private void UpdateRelationshipHighlighting()
         {
-            foreach (var rel in Relationships)
+            if (_selectedTable == null)
             {
-                if (_selectedTable == null)
+                // No selection - reset everything to normal
+                foreach (var table in Tables)
+                {
+                    table.IsDimmed = false;
+                }
+                foreach (var rel in Relationships)
                 {
                     rel.IsHighlighted = false;
                     rel.IsDimmed = false;
                 }
-                else
+            }
+            else
+            {
+                // Find connected tables
+                var connectedTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { _selectedTable.TableName };
+                foreach (var rel in Relationships)
+                {
+                    if (rel.FromTable == _selectedTable.TableName)
+                        connectedTables.Add(rel.ToTable);
+                    else if (rel.ToTable == _selectedTable.TableName)
+                        connectedTables.Add(rel.FromTable);
+                }
+
+                // Dim unconnected tables
+                foreach (var table in Tables)
+                {
+                    table.IsDimmed = !connectedTables.Contains(table.TableName);
+                }
+
+                // Highlight connected relationships, dim others
+                foreach (var rel in Relationships)
                 {
                     var isConnected = rel.FromTable == _selectedTable.TableName || rel.ToTable == _selectedTable.TableName;
                     rel.IsHighlighted = isConnected;
@@ -758,11 +827,58 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
+        /// Zooms to fit only selected tables in the view.
+        /// </summary>
+        public void ZoomToSelection()
+        {
+            var tablesToFit = SelectedTables.Count > 0 ? SelectedTables.ToList() : (_selectedTable != null ? new List<ModelDiagramTableViewModel> { _selectedTable } : null);
+            if (tablesToFit == null || tablesToFit.Count == 0) return;
+
+            var minX = tablesToFit.Min(t => t.X);
+            var minY = tablesToFit.Min(t => t.Y);
+            var maxX = tablesToFit.Max(t => t.X + t.Width);
+            var maxY = tablesToFit.Max(t => t.Y + t.Height);
+
+            var contentWidth = maxX - minX + 80;
+            var contentHeight = maxY - minY + 80;
+
+            var scaleX = ViewWidth / contentWidth;
+            var scaleY = ViewHeight / contentHeight;
+            var newScale = Math.Min(scaleX, scaleY) * 0.9; // 90% to add some margin
+
+            Scale = Math.Max(0.1, Math.Min(2.0, newScale));
+            
+            // Request scroll to the selection center (handled by view)
+            OnScrollToRequested?.Invoke(minX + contentWidth / 2 - 40, minY + contentHeight / 2 - 40);
+        }
+
+        /// <summary>
+        /// Event raised when scrolling to a position is requested.
+        /// </summary>
+        public event Action<double, double> OnScrollToRequested;
+
+        /// <summary>
         /// Resets zoom to 100%.
         /// </summary>
         public void ResetZoom()
         {
             Scale = 1.0;
+        }
+
+        /// <summary>
+        /// Zooms in by 10%.
+        /// </summary>
+        public void ZoomIn()
+        {
+            Scale = Math.Min(2.0, Scale + 0.1);
+        }
+
+        /// <summary>
+        /// Zooms out by 10%.
+        /// </summary>
+        public void ZoomOut()
+        {
+            Scale = Math.Max(0.1, Scale - 0.1);
         }
 
         /// <summary>
@@ -915,6 +1031,7 @@ namespace DaxStudio.UI.ViewModels
                 table.IsSelected = true;
             }
             NotifyOfPropertyChange(nameof(HasMultipleSelection));
+            NotifyOfPropertyChange(nameof(CanHighlightPath));
         }
 
         /// <summary>
@@ -931,7 +1048,59 @@ namespace DaxStudio.UI.ViewModels
                 NotifyOfPropertyChange(nameof(SelectedTable));
             }
             NotifyOfPropertyChange(nameof(HasMultipleSelection));
+            NotifyOfPropertyChange(nameof(CanHighlightPath));
             UpdateRelationshipHighlighting();
+        }
+
+        private ModelDiagramRelationshipViewModel _selectedRelationship;
+        /// <summary>
+        /// The currently selected relationship.
+        /// </summary>
+        public ModelDiagramRelationshipViewModel SelectedRelationship
+        {
+            get => _selectedRelationship;
+            set
+            {
+                if (_selectedRelationship != null)
+                {
+                    _selectedRelationship.IsSelected = false;
+                }
+                _selectedRelationship = value;
+                if (_selectedRelationship != null)
+                {
+                    _selectedRelationship.IsSelected = true;
+                }
+                NotifyOfPropertyChange();
+            }
+        }
+
+        /// <summary>
+        /// Selects a relationship and highlights the connected tables.
+        /// </summary>
+        public void SelectRelationship(ModelDiagramRelationshipViewModel relationship)
+        {
+            // Clear table selection
+            ClearSelection();
+            
+            // Select the relationship
+            SelectedRelationship = relationship;
+            
+            if (relationship != null)
+            {
+                // Highlight the connected tables
+                foreach (var table in Tables)
+                {
+                    var isConnected = table.TableName == relationship.FromTable || table.TableName == relationship.ToTable;
+                    table.IsDimmed = !isConnected;
+                }
+                
+                // Highlight this relationship, dim others
+                foreach (var rel in Relationships)
+                {
+                    rel.IsHighlighted = rel == relationship;
+                    rel.IsDimmed = rel != relationship;
+                }
+            }
         }
 
         /// <summary>
@@ -945,8 +1114,11 @@ namespace DaxStudio.UI.ViewModels
             }
             SelectedTables.Clear();
             _selectedTable = null;
+            SelectedRelationship = null; // Also clear relationship selection
             NotifyOfPropertyChange(nameof(SelectedTable));
             NotifyOfPropertyChange(nameof(HasMultipleSelection));
+            NotifyOfPropertyChange(nameof(CanHighlightPath));
+            UpdateRelationshipHighlighting(); // Reset all dimming
         }
 
         /// <summary>
@@ -961,7 +1133,146 @@ namespace DaxStudio.UI.ViewModels
                 table.IsSelected = true;
             }
             NotifyOfPropertyChange(nameof(HasMultipleSelection));
+            NotifyOfPropertyChange(nameof(CanHighlightPath));
         }
+
+        /// <summary>
+        /// Nudges selected tables by the specified delta.
+        /// </summary>
+        public void NudgeSelectedTables(double deltaX, double deltaY)
+        {
+            if (SelectedTables.Count == 0 && _selectedTable != null)
+            {
+                _selectedTable.X = Math.Max(0, _selectedTable.X + deltaX);
+                _selectedTable.Y = Math.Max(0, _selectedTable.Y + deltaY);
+            }
+            else
+            {
+                foreach (var table in SelectedTables)
+                {
+                    table.X = Math.Max(0, table.X + deltaX);
+                    table.Y = Math.Max(0, table.Y + deltaY);
+                }
+            }
+            RefreshLayout();
+            SaveCurrentLayout();
+        }
+
+        /// <summary>
+        /// Hides all selected tables from the diagram.
+        /// </summary>
+        public void HideSelectedTables()
+        {
+            var tablesToHide = SelectedTables.Count > 0 
+                ? SelectedTables.ToList() 
+                : (_selectedTable != null ? new List<ModelDiagramTableViewModel> { _selectedTable } : new List<ModelDiagramTableViewModel>());
+            
+            foreach (var table in tablesToHide)
+            {
+                table.IsHidden = true;
+            }
+            
+            ClearSelection();
+            RefreshLayout();
+        }
+
+        /// <summary>
+        /// Shows all hidden tables.
+        /// </summary>
+        public void ShowAllTables()
+        {
+            foreach (var table in Tables)
+            {
+                table.IsHidden = false;
+            }
+            // Reset filter to "All Tables"
+            _tableFilter = 0;
+            NotifyOfPropertyChange(nameof(TableFilter));
+            RefreshLayout();
+        }
+
+        /// <summary>
+        /// Highlights the path between two selected tables.
+        /// Uses BFS to find the shortest relationship path.
+        /// </summary>
+        public void HighlightPath()
+        {
+            if (SelectedTables.Count != 2) return;
+            
+            var startTable = SelectedTables[0].TableName;
+            var endTable = SelectedTables[1].TableName;
+            
+            // Build adjacency list
+            var adjacency = new Dictionary<string, List<(string neighbor, ModelDiagramRelationshipViewModel rel)>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var table in Tables)
+            {
+                adjacency[table.TableName] = new List<(string, ModelDiagramRelationshipViewModel)>();
+            }
+            foreach (var rel in Relationships)
+            {
+                if (adjacency.ContainsKey(rel.FromTable) && adjacency.ContainsKey(rel.ToTable))
+                {
+                    adjacency[rel.FromTable].Add((rel.ToTable, rel));
+                    adjacency[rel.ToTable].Add((rel.FromTable, rel));
+                }
+            }
+            
+            // BFS to find shortest path
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var queue = new Queue<(string table, List<string> path, List<ModelDiagramRelationshipViewModel> rels)>();
+            queue.Enqueue((startTable, new List<string> { startTable }, new List<ModelDiagramRelationshipViewModel>()));
+            visited.Add(startTable);
+            
+            List<string> foundPath = null;
+            List<ModelDiagramRelationshipViewModel> foundRels = null;
+            
+            while (queue.Count > 0)
+            {
+                var (current, path, rels) = queue.Dequeue();
+                
+                if (current.Equals(endTable, StringComparison.OrdinalIgnoreCase))
+                {
+                    foundPath = path;
+                    foundRels = rels;
+                    break;
+                }
+                
+                foreach (var (neighbor, rel) in adjacency[current])
+                {
+                    if (!visited.Contains(neighbor))
+                    {
+                        visited.Add(neighbor);
+                        var newPath = new List<string>(path) { neighbor };
+                        var newRels = new List<ModelDiagramRelationshipViewModel>(rels) { rel };
+                        queue.Enqueue((neighbor, newPath, newRels));
+                    }
+                }
+            }
+            
+            if (foundPath != null)
+            {
+                // Highlight the path tables and relationships
+                var pathTables = new HashSet<string>(foundPath, StringComparer.OrdinalIgnoreCase);
+                var pathRels = new HashSet<ModelDiagramRelationshipViewModel>(foundRels);
+                
+                foreach (var table in Tables)
+                {
+                    table.IsDimmed = !pathTables.Contains(table.TableName);
+                    table.IsSelected = pathTables.Contains(table.TableName);
+                }
+                
+                foreach (var rel in Relationships)
+                {
+                    rel.IsHighlighted = pathRels.Contains(rel);
+                    rel.IsDimmed = !pathRels.Contains(rel);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Whether path highlighting is available (exactly 2 tables selected).
+        /// </summary>
+        public bool CanHighlightPath => SelectedTables.Count == 2;
 
         /// <summary>
         /// Selects all tables within a rectangle (for drag-select).
@@ -985,6 +1296,7 @@ namespace DaxStudio.UI.ViewModels
                 NotifyOfPropertyChange(nameof(SelectedTable));
             }
             NotifyOfPropertyChange(nameof(HasMultipleSelection));
+            NotifyOfPropertyChange(nameof(CanHighlightPath));
         }
 
         /// <summary>
@@ -1472,6 +1784,16 @@ namespace DaxStudio.UI.ViewModels
         public int ColumnCount => Columns.Count(c => c.ObjectType == ADOTabularObjectType.Column);
         public int MeasureCount => Columns.Count(c => c.ObjectType == ADOTabularObjectType.Measure);
 
+        private bool _isHidden;
+        /// <summary>
+        /// Whether this table is manually hidden from the diagram (separate from model IsVisible).
+        /// </summary>
+        public bool IsHidden
+        {
+            get => _isHidden;
+            set { _isHidden = value; NotifyOfPropertyChange(); }
+        }
+
         private string _group;
         /// <summary>
         /// The group this table belongs to (for visual grouping).
@@ -1516,6 +1838,16 @@ namespace DaxStudio.UI.ViewModels
         }
 
         public BindableCollection<ModelDiagramColumnViewModel> Columns { get; }
+
+        /// <summary>
+        /// Key columns only (for collapsed view).
+        /// </summary>
+        public IEnumerable<ModelDiagramColumnViewModel> KeyColumns => Columns.Where(c => c.IsKey);
+
+        /// <summary>
+        /// Whether this table has any key columns.
+        /// </summary>
+        public bool HasKeyColumns => Columns.Any(c => c.IsKey);
 
         /// <summary>
         /// Tooltip with table details matching metadata pane style.
@@ -1633,7 +1965,18 @@ namespace DaxStudio.UI.ViewModels
 
         private bool _isCollapsed;
         private double _expandedHeight;
-        private const double CollapsedHeight = 32; // Height for just the header
+        private const double HeaderHeight = 32; // Height for just the header
+        private const double KeyColumnRowHeight = 18; // Height per key column row
+
+        /// <summary>
+        /// Calculate collapsed height based on header + key columns.
+        /// </summary>
+        private double CalculateCollapsedHeight()
+        {
+            int keyCount = Columns.Count(c => c.IsKey);
+            if (keyCount == 0) return HeaderHeight;
+            return HeaderHeight + 6 + (keyCount * KeyColumnRowHeight); // 6 = padding
+        }
 
         public bool IsCollapsed
         {
@@ -1646,12 +1989,12 @@ namespace DaxStudio.UI.ViewModels
                 {
                     // Collapsing: save current height and set to collapsed height
                     _expandedHeight = Height;
-                    Height = CollapsedHeight;
+                    Height = CalculateCollapsedHeight();
                 }
                 else
                 {
                     // Expanding: restore saved height (or calculate default)
-                    Height = _expandedHeight > CollapsedHeight ? _expandedHeight : CalculateDefaultHeight();
+                    Height = _expandedHeight > CalculateCollapsedHeight() ? _expandedHeight : CalculateDefaultHeight();
                 }
                 
                 _isCollapsed = value; 
@@ -1664,7 +2007,7 @@ namespace DaxStudio.UI.ViewModels
         /// </summary>
         public double ExpandedHeight
         {
-            get => _expandedHeight > CollapsedHeight ? _expandedHeight : Height;
+            get => _expandedHeight > CalculateCollapsedHeight() ? _expandedHeight : Height;
             set => _expandedHeight = value;
         }
 
@@ -2007,6 +2350,13 @@ namespace DaxStudio.UI.ViewModels
         {
             get => _isDimmed;
             set { _isDimmed = value; NotifyOfPropertyChange(); }
+        }
+
+        private bool _isSelected;
+        public bool IsSelected
+        {
+            get => _isSelected;
+            set { _isSelected = value; NotifyOfPropertyChange(); }
         }
 
         /// <summary>
