@@ -114,6 +114,7 @@ namespace DaxStudio.UI.ViewModels
         /// </summary>
         public void CollapseAll()
         {
+            SaveLayoutForUndo();
             foreach (var table in Tables)
             {
                 table.IsCollapsed = true;
@@ -126,6 +127,7 @@ namespace DaxStudio.UI.ViewModels
         /// </summary>
         public void ExpandAll()
         {
+            SaveLayoutForUndo();
             foreach (var table in Tables)
             {
                 table.IsCollapsed = false;
@@ -373,6 +375,71 @@ namespace DaxStudio.UI.ViewModels
             if (!SnapToGrid) return value;
             return Math.Round(value / GridSize) * GridSize;
         }
+
+        #region Layout Undo
+
+        private Stack<Dictionary<string, (double X, double Y, bool IsCollapsed)>> _layoutUndoStack = 
+            new Stack<Dictionary<string, (double X, double Y, bool IsCollapsed)>>();
+        
+        private const int MaxUndoLevels = 10;
+
+        /// <summary>
+        /// Whether there are layout changes that can be undone.
+        /// </summary>
+        public bool CanUndoLayout => _layoutUndoStack.Count > 0;
+
+        /// <summary>
+        /// Saves the current layout state for undo.
+        /// </summary>
+        private void SaveLayoutForUndo()
+        {
+            var state = new Dictionary<string, (double X, double Y, bool IsCollapsed)>();
+            foreach (var table in Tables)
+            {
+                state[table.TableName] = (table.X, table.Y, table.IsCollapsed);
+            }
+            
+            _layoutUndoStack.Push(state);
+            
+            // Limit stack size
+            if (_layoutUndoStack.Count > MaxUndoLevels)
+            {
+                var items = _layoutUndoStack.ToArray();
+                _layoutUndoStack.Clear();
+                for (int i = 0; i < MaxUndoLevels; i++)
+                {
+                    _layoutUndoStack.Push(items[MaxUndoLevels - 1 - i]);
+                }
+            }
+            
+            NotifyOfPropertyChange(nameof(CanUndoLayout));
+        }
+
+        /// <summary>
+        /// Undoes the last layout change (Auto Arrange, etc.).
+        /// </summary>
+        public void UndoLayout()
+        {
+            if (_layoutUndoStack.Count == 0) return;
+
+            var state = _layoutUndoStack.Pop();
+            
+            foreach (var table in Tables)
+            {
+                if (state.TryGetValue(table.TableName, out var pos))
+                {
+                    table.X = pos.X;
+                    table.Y = pos.Y;
+                    table.IsCollapsed = pos.IsCollapsed;
+                }
+            }
+            
+            RefreshLayout();
+            SaveCurrentLayout();
+            NotifyOfPropertyChange(nameof(CanUndoLayout));
+        }
+
+        #endregion
 
         private bool _showMiniMap = false;
         /// <summary>
@@ -945,6 +1012,7 @@ namespace DaxStudio.UI.ViewModels
         /// </summary>
         public void AutoArrange()
         {
+            SaveLayoutForUndo();
             LayoutDiagram();
             RefreshLayout();
             SaveCurrentLayout();

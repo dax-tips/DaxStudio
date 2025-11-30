@@ -654,9 +654,15 @@
                             ToolTip="Show all hidden tables"/>
                     <Button Content="Auto Layout"
                             cal:Message.Attach="AutoArrange"
-                            Margin="0,0,8,0"
+                            Margin="0,0,4,0"
                             Padding="8,2"
                             ToolTip="Automatically arrange tables"/>
+                    <Button Content="Undo"
+                            cal:Message.Attach="UndoLayout"
+                            IsEnabled="{Binding CanUndoLayout}"
+                            Margin="0,0,8,0"
+                            Padding="8,2"
+                            ToolTip="Undo last layout change (Ctrl+Z)"/>
                 </StackPanel>
                 
                 <!-- Zoom Controls -->
@@ -723,6 +729,11 @@
                         <MenuItem Header="Expand All Tables" cal:Message.Attach="ExpandAll"/>
                         <MenuItem Header="Collapse All Tables" cal:Message.Attach="CollapseAll"/>
                         <Separator/>
+                        <MenuItem Header="Undo Layout" cal:Message.Attach="UndoLayout" 
+                                  IsEnabled="{Binding CanUndoLayout}"
+                                  InputGestureText="Ctrl+Z"
+                                  ToolTip="Undo last layout change"/>
+                        <Separator/>
                         <MenuItem Header="Select All" cal:Message.Attach="SelectAllTables" InputGestureText="Ctrl+A"/>
                         <MenuItem Header="Clear Selection" cal:Message.Attach="ClearSelection" InputGestureText="Esc"/>
                         <MenuItem Header="Highlight Path Between Tables" cal:Message.Attach="HighlightPath"
@@ -736,6 +747,10 @@
                         <Separator/>
                         <MenuItem Header="Layout">
                             <MenuItem Header="Auto Arrange" cal:Message.Attach="AutoArrange" ToolTip="Re-arrange tables using automatic layout"/>
+                            <MenuItem Header="Undo Layout" cal:Message.Attach="UndoLayout" 
+                                      IsEnabled="{Binding CanUndoLayout}"
+                                      InputGestureText="Ctrl+Z"/>
+                            <Separator/>
                             <MenuItem Header="Arrange by Group" cal:Message.Attach="ArrangeByGroup" ToolTip="Arrange tables in rows by their group"/>
                             <Separator/>
                             <MenuItem Header="Clear Saved Layout" cal:Message.Attach="ClearSavedLayout" ToolTip="Remove saved layout and use auto-arrange"/>

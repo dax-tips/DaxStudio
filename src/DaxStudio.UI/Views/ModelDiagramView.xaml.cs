@@ -655,6 +655,13 @@ namespace DaxStudio.UI.Views
                             e.Handled = true;
                         }
                         break;
+                    case Key.Z:
+                        if (Keyboard.Modifiers == ModifierKeys.Control && vm.CanUndoLayout)
+                        {
+                            vm.UndoLayout();
+                            e.Handled = true;
+                        }
+                        break;
                     case Key.Add:
                     case Key.OemPlus:
                         if (Keyboard.Modifiers == ModifierKeys.Control)
