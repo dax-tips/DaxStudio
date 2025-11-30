@@ -1194,7 +1194,8 @@ namespace DaxStudio.UI.ViewModels
                     return;
                 }
 
-                var diagramViewModel = new ModelDiagramViewModel(_eventAggregator);
+                var metadataProvider = ActiveDocument.Connection as IMetadataProvider;
+                var diagramViewModel = new ModelDiagramViewModel(_eventAggregator, metadataProvider, Options);
                 diagramViewModel.LoadFromModel(model);
 
                 // Publish event to show the tool window in the docking panel

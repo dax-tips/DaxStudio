@@ -1,5 +1,6 @@
 using ADOTabular;
 using Caliburn.Micro;
+using DaxStudio.Interfaces;
 using DaxStudio.UI.Events;
 using DaxStudio.UI.Interfaces;
 using DaxStudio.UI.Model;
@@ -10,6 +11,8 @@ using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media;
 
@@ -25,6 +28,8 @@ namespace DaxStudio.UI.ViewModels
     public class ModelDiagramViewModel : ToolWindowBase, IHandle<MetadataLoadedEvent>
     {
         private readonly IEventAggregator _eventAggregator;
+        private readonly IMetadataProvider _metadataProvider;
+        private readonly IGlobalOptions _options;
         private ADOTabularModel _model;
         private string _currentModelKey;
 
@@ -37,9 +42,11 @@ namespace DaxStudio.UI.ViewModels
             "ModelDiagramLayouts.json");
 
         [ImportingConstructor]
-        public ModelDiagramViewModel(IEventAggregator eventAggregator)
+        public ModelDiagramViewModel(IEventAggregator eventAggregator, IMetadataProvider metadataProvider, IGlobalOptions options)
         {
             _eventAggregator = eventAggregator;
+            _metadataProvider = metadataProvider;
+            _options = options;
             _eventAggregator.SubscribeOnPublishedThread(this);
         }
 
@@ -54,6 +61,18 @@ namespace DaxStudio.UI.ViewModels
         /// Icon for the tool window (used by AvalonDock).
         /// </summary>
         public ImageSource IconSource => null;
+
+        /// <summary>
+        /// Unsubscribe from event aggregator when the window is closed to prevent memory leaks.
+        /// </summary>
+        protected override Task OnDeactivateAsync(bool close, CancellationToken cancellationToken)
+        {
+            if (close)
+            {
+                _eventAggregator.Unsubscribe(this);
+            }
+            return base.OnDeactivateAsync(close, cancellationToken);
+        }
 
         #endregion
 
@@ -280,9 +299,11 @@ namespace DaxStudio.UI.ViewModels
 
         /// <summary>
         /// Applies the table filter to show/hide tables based on type.
+        /// Also hides relationships between hidden tables.
         /// </summary>
         private void ApplyTableFilter()
         {
+            // First, set table visibility
             foreach (var table in Tables)
             {
                 switch (_tableFilter)
@@ -295,6 +316,15 @@ namespace DaxStudio.UI.ViewModels
                         break;
                 }
             }
+            
+            // Then, hide relationships where either table is hidden
+            foreach (var rel in Relationships)
+            {
+                bool fromVisible = rel.FromTableViewModel != null && !rel.FromTableViewModel.IsHidden;
+                bool toVisible = rel.ToTableViewModel != null && !rel.ToTableViewModel.IsHidden;
+                rel.IsVisible = fromVisible && toVisible;
+            }
+            
             RefreshLayout();
         }
 
@@ -568,13 +598,16 @@ namespace DaxStudio.UI.ViewModels
                 {
                     if (!ShowHiddenObjects && !table.IsVisible) continue;
 
-                    var tableVm = new ModelDiagramTableViewModel(table, ShowHiddenObjects);
+                    var tableVm = new ModelDiagramTableViewModel(table, ShowHiddenObjects, _metadataProvider, _options);
                     Tables.Add(tableVm);
                 }
 
+                // Create a dictionary for O(1) table lookups (performance optimization for large models)
+                var tableDict = Tables.ToDictionary(t => t.TableName, StringComparer.OrdinalIgnoreCase);
+
                 // Create view models for relationships
                 // Relationships are stored on individual tables, so we need to gather from all tables
-                var processedRelationships = new HashSet<string>();
+                var processedRelationships = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var table in model.Tables)
                 {
                     foreach (var rel in table.Relationships)
@@ -584,8 +617,8 @@ namespace DaxStudio.UI.ViewModels
                         if (processedRelationships.Contains(relKey)) continue;
                         processedRelationships.Add(relKey);
 
-                        var fromTableVm = Tables.FirstOrDefault(t => t.TableName == rel.FromTable?.Name);
-                        var toTableVm = Tables.FirstOrDefault(t => t.TableName == rel.ToTable?.Name);
+                        tableDict.TryGetValue(rel.FromTable?.Name ?? "", out var fromTableVm);
+                        tableDict.TryGetValue(rel.ToTable?.Name ?? "", out var toTableVm);
 
                         if (fromTableVm != null && toTableVm != null)
                         {
@@ -638,6 +671,7 @@ namespace DaxStudio.UI.ViewModels
         /// Tables connected by relationships are placed closer together.
         /// Fact tables (many relationships, on the "many" side) go at the bottom.
         /// Dimension tables (fewer relationships, on the "one" side) go at the top.
+        /// Uses Sugiyama-style layered graph drawing algorithm.
         /// </summary>
         private void LayoutDiagram()
         {
@@ -645,15 +679,18 @@ namespace DaxStudio.UI.ViewModels
 
             const double tableWidth = 200;
             const double tableHeight = 180;
-            const double horizontalSpacing = 80;
-            const double verticalSpacing = 100;
-            const double padding = 40;
+            const double horizontalSpacing = 100;
+            const double verticalSpacing = 120;
+            const double padding = 50;
 
-            // Step 1: Analyze relationships to find fact tables and dimension chains
-            var analysis = AnalyzeModelStructure();
+            // Step 1: Assign tables to layers based on longest path from root nodes
+            var layers = AssignLayers();
             
-            // Step 2: Layout based on star/snowflake schema pattern
-            LayoutStarSchema(analysis, tableWidth, tableHeight, horizontalSpacing, verticalSpacing, padding);
+            // Step 2: Order tables within each layer to minimize edge crossings
+            MinimizeCrossings(layers);
+            
+            // Step 3: Assign X coordinates using barycenter method
+            AssignCoordinates(layers, tableWidth, tableHeight, horizontalSpacing, verticalSpacing, padding);
 
             // Calculate canvas size to fit all tables
             var maxX = Tables.Any() ? Tables.Max(t => t.X + t.Width) : 100;
@@ -669,412 +706,510 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
-        /// Analyzes the model structure to identify fact tables, dimension chains, and standalone tables.
+        /// Assigns tables to layers using longest-path layering (Sugiyama Step 2).
+        /// The "one" side of relationships (dimensions) are placed above the "many" side (facts).
         /// </summary>
-        private ModelStructureAnalysis AnalyzeModelStructure()
+        private List<List<ModelDiagramTableViewModel>> AssignLayers()
         {
-            var analysis = new ModelStructureAnalysis();
+            var layers = new List<List<ModelDiagramTableViewModel>>();
+            var tableLayer = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             
-            // Count many-side relationships for each table
-            var manySideCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            var oneSideCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            // Build directed adjacency: from "one" side to "many" side (dimension -> fact)
+            var adjacencyToMany = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var adjacencyFromMany = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var inDegree = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             
             foreach (var table in Tables)
             {
-                manySideCounts[table.TableName] = 0;
-                oneSideCounts[table.TableName] = 0;
+                adjacencyToMany[table.TableName] = new List<string>();
+                adjacencyFromMany[table.TableName] = new List<string>();
+                inDegree[table.TableName] = 0;
             }
             
+            // Direction: from "1" side (dimension) to "*" side (fact)
             foreach (var rel in Relationships)
             {
-                // FromCardinality is the cardinality of the FromTable side
-                if (rel.FromCardinality == "*" || rel.FromCardinality == "M")
-                    manySideCounts[rel.FromTable] = manySideCounts.GetValueOrDefault(rel.FromTable) + 1;
-                else
-                    oneSideCounts[rel.FromTable] = oneSideCounts.GetValueOrDefault(rel.FromTable) + 1;
-                    
-                if (rel.ToCardinality == "*" || rel.ToCardinality == "M")
-                    manySideCounts[rel.ToTable] = manySideCounts.GetValueOrDefault(rel.ToTable) + 1;
-                else
-                    oneSideCounts[rel.ToTable] = oneSideCounts.GetValueOrDefault(rel.ToTable) + 1;
-            }
-            
-            // Identify fact tables: tables with multiple many-side relationships
-            // The table with the MOST many-side relationships is likely the main fact table
-            var factCandidates = Tables
-                .Where(t => manySideCounts.GetValueOrDefault(t.TableName) >= 2)
-                .OrderByDescending(t => manySideCounts.GetValueOrDefault(t.TableName))
-                .ThenByDescending(t => oneSideCounts.GetValueOrDefault(t.TableName))
-                .ToList();
-            
-            if (factCandidates.Any())
-            {
-                analysis.FactTables.AddRange(factCandidates);
-            }
-            else
-            {
-                // No clear fact table - find table with most total relationships
-                var mostConnected = Tables
-                    .OrderByDescending(t => manySideCounts.GetValueOrDefault(t.TableName) + oneSideCounts.GetValueOrDefault(t.TableName))
-                    .FirstOrDefault();
-                if (mostConnected != null)
-                    analysis.FactTables.Add(mostConnected);
-            }
-            
-            // Build dimension chains (e.g., Product -> Subcategory -> Category)
-            var processedTables = new HashSet<string>(analysis.FactTables.Select(f => f.TableName), StringComparer.OrdinalIgnoreCase);
-            
-            foreach (var factTable in analysis.FactTables)
-            {
-                // Find all dimensions directly connected to this fact table
-                foreach (var rel in Relationships)
+                string fromTable, toTable;
+                
+                // Determine direction based on cardinality
+                // "1" side points to "*" side (filter flows from one to many)
+                if (rel.FromCardinality == "1" && (rel.ToCardinality == "*" || rel.ToCardinality == "M"))
                 {
-                    string dimTableName = null;
-                    
-                    // Find dimension tables (on the "one" side of relationship with fact)
-                    if (rel.FromTable.Equals(factTable.TableName, StringComparison.OrdinalIgnoreCase) && 
-                        (rel.ToCardinality == "1" || rel.ToCardinality == ""))
+                    fromTable = rel.FromTable;
+                    toTable = rel.ToTable;
+                }
+                else if (rel.ToCardinality == "1" && (rel.FromCardinality == "*" || rel.FromCardinality == "M"))
+                {
+                    fromTable = rel.ToTable;
+                    toTable = rel.FromTable;
+                }
+                else
+                {
+                    // Same cardinality on both sides - use alphabetical order for consistency
+                    if (string.Compare(rel.FromTable, rel.ToTable, StringComparison.OrdinalIgnoreCase) < 0)
                     {
-                        dimTableName = rel.ToTable;
+                        fromTable = rel.FromTable;
+                        toTable = rel.ToTable;
                     }
-                    else if (rel.ToTable.Equals(factTable.TableName, StringComparison.OrdinalIgnoreCase) && 
-                             (rel.FromCardinality == "1" || rel.FromCardinality == ""))
+                    else
                     {
-                        dimTableName = rel.FromTable;
+                        fromTable = rel.ToTable;
+                        toTable = rel.FromTable;
                     }
-                    
-                    if (dimTableName != null && !processedTables.Contains(dimTableName))
+                }
+                
+                if (adjacencyToMany.ContainsKey(fromTable) && adjacencyFromMany.ContainsKey(toTable))
+                {
+                    if (!adjacencyToMany[fromTable].Contains(toTable))
                     {
-                        // Build the chain starting from this dimension
-                        var chain = BuildDimensionChain(dimTableName, processedTables);
-                        if (chain.Count > 0)
-                        {
-                            analysis.DimensionChains.Add(chain);
-                            foreach (var t in chain)
-                                processedTables.Add(t.TableName);
-                        }
+                        adjacencyToMany[fromTable].Add(toTable);
+                        adjacencyFromMany[toTable].Add(fromTable);
+                        inDegree[toTable]++;
                     }
                 }
             }
             
-            // Any remaining tables are standalone
-            foreach (var table in Tables)
+            // Find root nodes (tables with no incoming edges - top-level dimensions)
+            var rootNodes = Tables.Where(t => inDegree[t.TableName] == 0).ToList();
+            
+            // If no clear roots (cyclic), pick tables with most outgoing edges as roots
+            if (!rootNodes.Any())
             {
-                if (!processedTables.Contains(table.TableName))
-                {
-                    analysis.StandaloneTables.Add(table);
-                    processedTables.Add(table.TableName);
-                }
+                rootNodes = Tables
+                    .OrderByDescending(t => adjacencyToMany[t.TableName].Count)
+                    .ThenBy(t => adjacencyFromMany[t.TableName].Count)
+                    .Take(Math.Max(1, Tables.Count / 3))
+                    .ToList();
             }
             
-            return analysis;
-        }
-        
-        /// <summary>
-        /// Builds a dimension chain by following one-to-many relationships outward.
-        /// E.g., Product -> Product Subcategory -> Product Category
-        /// </summary>
-        private List<ModelDiagramTableViewModel> BuildDimensionChain(string startTableName, HashSet<string> excludeTables)
-        {
-            var chain = new List<ModelDiagramTableViewModel>();
-            var visited = new HashSet<string>(excludeTables, StringComparer.OrdinalIgnoreCase);
+            // Assign layers using BFS from root nodes (topological ordering)
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var queue = new Queue<(ModelDiagramTableViewModel table, int layer)>();
             
-            var startTable = Tables.FirstOrDefault(t => t.TableName.Equals(startTableName, StringComparison.OrdinalIgnoreCase));
-            if (startTable == null) return chain;
+            foreach (var root in rootNodes)
+            {
+                queue.Enqueue((root, 0));
+                visited.Add(root.TableName);
+            }
             
-            // BFS to find connected dimension tables
-            var queue = new Queue<ModelDiagramTableViewModel>();
-            queue.Enqueue(startTable);
-            visited.Add(startTableName);
-            
+            // Process tables level by level
             while (queue.Count > 0)
             {
-                var current = queue.Dequeue();
-                chain.Add(current);
+                var (table, layer) = queue.Dequeue();
                 
-                // Find tables connected via one-to-one or one-to-many where current is on "many" side
-                foreach (var rel in Relationships)
+                // Ensure layer exists
+                while (layers.Count <= layer)
+                    layers.Add(new List<ModelDiagramTableViewModel>());
+                
+                layers[layer].Add(table);
+                tableLayer[table.TableName] = layer;
+                
+                // Add connected tables at next layer
+                foreach (var childName in adjacencyToMany[table.TableName])
                 {
-                    string nextTableName = null;
-                    
-                    // Current table is on "many" side, look for the "one" side
-                    if (rel.FromTable.Equals(current.TableName, StringComparison.OrdinalIgnoreCase) &&
-                        (rel.FromCardinality == "*" || rel.FromCardinality == "M") &&
-                        !visited.Contains(rel.ToTable))
+                    if (!visited.Contains(childName))
                     {
-                        nextTableName = rel.ToTable;
-                    }
-                    else if (rel.ToTable.Equals(current.TableName, StringComparison.OrdinalIgnoreCase) &&
-                             (rel.ToCardinality == "*" || rel.ToCardinality == "M") &&
-                             !visited.Contains(rel.FromTable))
-                    {
-                        nextTableName = rel.FromTable;
-                    }
-                    
-                    if (nextTableName != null)
-                    {
-                        var nextTable = Tables.FirstOrDefault(t => t.TableName.Equals(nextTableName, StringComparison.OrdinalIgnoreCase));
-                        if (nextTable != null)
+                        visited.Add(childName);
+                        var childTable = Tables.FirstOrDefault(t => t.TableName.Equals(childName, StringComparison.OrdinalIgnoreCase));
+                        if (childTable != null)
                         {
-                            visited.Add(nextTableName);
-                            queue.Enqueue(nextTable);
+                            queue.Enqueue((childTable, layer + 1));
                         }
                     }
                 }
             }
             
-            return chain;
-        }
-        
-        /// <summary>
-        /// Layouts tables in a star/snowflake schema pattern.
-        /// </summary>
-        private void LayoutStarSchema(ModelStructureAnalysis analysis, double tableWidth, double tableHeight, 
-            double hSpacing, double vSpacing, double padding)
-        {
-            // Calculate the center position for fact tables
-            int totalDimensions = analysis.DimensionChains.Count + analysis.StandaloneTables.Count;
-            double centerX = padding + (totalDimensions / 2.0) * (tableWidth + hSpacing);
-            double factY = padding + vSpacing + tableHeight; // Leave room for dimensions above
-            
-            // Position fact table(s) in the center
-            double factX = centerX - (analysis.FactTables.Count * (tableWidth + hSpacing) / 2);
-            foreach (var factTable in analysis.FactTables)
+            // Add any remaining unvisited tables (disconnected components) to a new layer
+            var unvisited = Tables.Where(t => !visited.Contains(t.TableName)).ToList();
+            if (unvisited.Any())
             {
-                factTable.X = factX;
-                factTable.Y = factY;
-                factTable.Width = tableWidth;
-                factTable.Height = tableHeight;
-                factX += tableWidth + hSpacing;
+                layers.Add(unvisited);
             }
             
-            // Layout dimension chains around the fact table
-            // We'll arrange them in a row above the fact table, with chains extending upward
-            double dimX = padding;
-            double dimBaseY = padding;
+            return layers;
+        }
+
+        /// <summary>
+        /// Minimizes edge crossings using barycenter heuristic (Sugiyama Step 4).
+        /// Multiple passes: sweep down then up repeatedly.
+        /// </summary>
+        private void MinimizeCrossings(List<List<ModelDiagramTableViewModel>> layers)
+        {
+            if (layers.Count < 2) return;
             
-            // Sort chains: longer chains first, then by first table name
-            var sortedChains = analysis.DimensionChains
-                .OrderByDescending(c => c.Count)
-                .ThenBy(c => c.FirstOrDefault()?.TableName ?? "")
-                .ToList();
+            // Build adjacency map
+            var neighbors = BuildNeighborMap();
             
-            foreach (var chain in sortedChains)
+            // Multiple passes of crossing minimization using barycenter heuristic
+            const int maxIterations = 4;
+            
+            for (int iter = 0; iter < maxIterations; iter++)
             {
-                // Layout chain horizontally, connected tables next to each other
-                double chainX = dimX;
-                foreach (var table in chain)
+                // Downward sweep: order layer i based on positions in layer i-1
+                for (int i = 1; i < layers.Count; i++)
                 {
-                    table.X = chainX;
-                    table.Y = dimBaseY;
-                    table.Width = tableWidth;
-                    table.Height = tableHeight;
-                    chainX += tableWidth + hSpacing / 2; // Tighter spacing within chains
+                    OrderLayerByBarycenter(layers[i], layers[i - 1], neighbors);
                 }
                 
-                // Move to next position (account for chain width)
-                dimX = chainX + hSpacing / 2;
+                // Upward sweep: order layer i based on positions in layer i+1
+                for (int i = layers.Count - 2; i >= 0; i--)
+                {
+                    OrderLayerByBarycenter(layers[i], layers[i + 1], neighbors);
+                }
             }
             
-            // Layout standalone tables in a row below the fact table
-            double standaloneY = factY + tableHeight + vSpacing;
-            double standaloneX = padding;
-            
-            foreach (var table in analysis.StandaloneTables.OrderBy(t => t.TableName))
-            {
-                table.X = standaloneX;
-                table.Y = standaloneY;
-                table.Width = tableWidth;
-                table.Height = tableHeight;
-                standaloneX += tableWidth + hSpacing;
-            }
-            
-            // If there are many standalone tables, also check if we need a second row
-            // and recenter everything
-            RecenterLayout(analysis, tableWidth, hSpacing, padding);
+            // Post-processing: swap adjacent tables if it reduces crossings
+            OptimizeCrossingsWithSwaps(layers, neighbors);
         }
-        
+
         /// <summary>
-        /// Recenters the layout so fact tables are visually centered.
+        /// Post-processing step to reduce edge crossings by swapping adjacent tables within layers.
         /// </summary>
-        private void RecenterLayout(ModelStructureAnalysis analysis, double tableWidth, double hSpacing, double padding)
+        private void OptimizeCrossingsWithSwaps(List<List<ModelDiagramTableViewModel>> layers, 
+            Dictionary<string, HashSet<string>> neighbors)
         {
-            if (!Tables.Any()) return;
+            bool improved = true;
+            int maxPasses = 3;
+            int pass = 0;
             
-            // Find the horizontal extent of all tables
-            double minX = Tables.Min(t => t.X);
-            double maxX = Tables.Max(t => t.X + t.Width);
-            double totalWidth = maxX - minX;
-            
-            // Find the center of fact tables
-            if (analysis.FactTables.Any())
+            while (improved && pass < maxPasses)
             {
-                double factCenterX = analysis.FactTables.Average(t => t.X + t.Width / 2);
-                double layoutCenterX = minX + totalWidth / 2;
+                improved = false;
+                pass++;
                 
-                // If fact tables aren't centered, shift everything
-                double shift = factCenterX - layoutCenterX;
-                if (Math.Abs(shift) > 10)
+                // Try swapping adjacent pairs in each layer
+                for (int layerIdx = 0; layerIdx < layers.Count; layerIdx++)
                 {
-                    foreach (var table in Tables)
+                    var layer = layers[layerIdx];
+                    
+                    // Get adjacent layers for crossing calculation
+                    var upperLayer = layerIdx > 0 ? layers[layerIdx - 1] : null;
+                    var lowerLayer = layerIdx < layers.Count - 1 ? layers[layerIdx + 1] : null;
+                    
+                    // Try swapping each adjacent pair
+                    for (int i = 0; i < layer.Count - 1; i++)
                     {
-                        table.X -= shift;
+                        int currentCrossings = CountCrossingsForPair(layer, i, i + 1, upperLayer, lowerLayer, neighbors);
+                        
+                        // Swap and count
+                        var temp = layer[i];
+                        layer[i] = layer[i + 1];
+                        layer[i + 1] = temp;
+                        
+                        int swappedCrossings = CountCrossingsForPair(layer, i, i + 1, upperLayer, lowerLayer, neighbors);
+                        
+                        if (swappedCrossings < currentCrossings)
+                        {
+                            // Keep the swap
+                            improved = true;
+                        }
+                        else
+                        {
+                            // Revert the swap
+                            temp = layer[i];
+                            layer[i] = layer[i + 1];
+                            layer[i + 1] = temp;
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Counts edge crossings involving two specific positions in a layer.
+        /// </summary>
+        private int CountCrossingsForPair(List<ModelDiagramTableViewModel> layer, int pos1, int pos2,
+            List<ModelDiagramTableViewModel> upperLayer, List<ModelDiagramTableViewModel> lowerLayer,
+            Dictionary<string, HashSet<string>> neighbors)
+        {
+            int crossings = 0;
+            
+            var table1 = layer[pos1];
+            var table2 = layer[pos2];
+            
+            // Check crossings with upper layer
+            if (upperLayer != null)
+            {
+                crossings += CountCrossingsBetweenTables(table1, pos1, table2, pos2, upperLayer, neighbors);
+            }
+            
+            // Check crossings with lower layer
+            if (lowerLayer != null)
+            {
+                crossings += CountCrossingsBetweenTables(table1, pos1, table2, pos2, lowerLayer, neighbors);
+            }
+            
+            return crossings;
+        }
+
+        /// <summary>
+        /// Counts crossings between edges from two tables to an adjacent layer.
+        /// </summary>
+        private int CountCrossingsBetweenTables(ModelDiagramTableViewModel table1, int pos1,
+            ModelDiagramTableViewModel table2, int pos2,
+            List<ModelDiagramTableViewModel> adjacentLayer,
+            Dictionary<string, HashSet<string>> neighbors)
+        {
+            int crossings = 0;
+            
+            // Get neighbors of table1 in adjacent layer
+            var neighbors1 = new List<int>();
+            if (neighbors.TryGetValue(table1.TableName, out var n1))
+            {
+                for (int i = 0; i < adjacentLayer.Count; i++)
+                {
+                    if (n1.Contains(adjacentLayer[i].TableName))
+                        neighbors1.Add(i);
+                }
+            }
+            
+            // Get neighbors of table2 in adjacent layer
+            var neighbors2 = new List<int>();
+            if (neighbors.TryGetValue(table2.TableName, out var n2))
+            {
+                for (int i = 0; i < adjacentLayer.Count; i++)
+                {
+                    if (n2.Contains(adjacentLayer[i].TableName))
+                        neighbors2.Add(i);
+                }
+            }
+            
+            // Count crossings: edge from table1 (at pos1) to adj[i] crosses edge from table2 (at pos2) to adj[j]
+            // if (pos1 < pos2 and i > j) or (pos1 > pos2 and i < j)
+            foreach (int adjPos1 in neighbors1)
+            {
+                foreach (int adjPos2 in neighbors2)
+                {
+                    // Crossing occurs when the relative order is different
+                    if ((pos1 < pos2 && adjPos1 > adjPos2) || (pos1 > pos2 && adjPos1 < adjPos2))
+                    {
+                        crossings++;
                     }
                 }
             }
             
-            // Ensure all tables have positive coordinates
-            double minXAfter = Tables.Min(t => t.X);
-            if (minXAfter < padding)
+            return crossings;
+        }
+
+        /// <summary>
+        /// Orders a layer based on the average position of neighbors in the reference layer (barycenter).
+        /// </summary>
+        private void OrderLayerByBarycenter(List<ModelDiagramTableViewModel> layer, 
+            List<ModelDiagramTableViewModel> referenceLayer, 
+            Dictionary<string, HashSet<string>> neighbors)
+        {
+            // Calculate barycenter for each table in the layer
+            var barycenters = new Dictionary<ModelDiagramTableViewModel, double>();
+            
+            for (int i = 0; i < referenceLayer.Count; i++)
             {
-                double adjust = padding - minXAfter;
-                foreach (var table in Tables)
+                // Position index of reference table
+                var refTable = referenceLayer[i];
+                if (!neighbors.ContainsKey(refTable.TableName)) continue;
+                
+                foreach (var neighborName in neighbors[refTable.TableName])
                 {
-                    table.X += adjust;
+                    var neighborTable = layer.FirstOrDefault(t => t.TableName.Equals(neighborName, StringComparison.OrdinalIgnoreCase));
+                    if (neighborTable != null)
+                    {
+                        if (!barycenters.ContainsKey(neighborTable))
+                            barycenters[neighborTable] = 0;
+                        barycenters[neighborTable] += i;
+                    }
                 }
             }
-        }
-        
-        /// <summary>
-        /// Analysis results for model structure.
-        /// </summary>
-        private class ModelStructureAnalysis
-        {
-            public List<ModelDiagramTableViewModel> FactTables { get; } = new List<ModelDiagramTableViewModel>();
-            public List<List<ModelDiagramTableViewModel>> DimensionChains { get; } = new List<List<ModelDiagramTableViewModel>>();
-            public List<ModelDiagramTableViewModel> StandaloneTables { get; } = new List<ModelDiagramTableViewModel>();
-        }
-
-        /// <summary>
-        /// Categorizes tables based on their relationship patterns.
-        /// </summary>
-        private Dictionary<ModelDiagramTableViewModel, TableLayoutInfo> CategorizeTablesForLayout(
-            Dictionary<string, HashSet<string>> relationshipMap)
-        {
-            var result = new Dictionary<ModelDiagramTableViewModel, TableLayoutInfo>();
-
-            foreach (var table in Tables)
+            
+            // Normalize by number of neighbors
+            foreach (var table in layer)
             {
-                var info = new TableLayoutInfo
+                if (barycenters.ContainsKey(table) && neighbors.ContainsKey(table.TableName))
                 {
-                    ConnectionCount = relationshipMap.TryGetValue(table.TableName, out var connections) ? connections.Count : 0
-                };
-
-                // Count how many times this table is on the "many" side vs "one" side
-                int manySideCount = 0;
-                int oneSideCount = 0;
-
-                foreach (var rel in Relationships)
-                {
-                    if (rel.FromTable == table.TableName)
-                    {
-                        // This table is on the "From" side
-                        if (rel.FromCardinality == "*") manySideCount++;
-                        else oneSideCount++;
-                    }
-                    else if (rel.ToTable == table.TableName)
-                    {
-                        // This table is on the "To" side
-                        if (rel.ToCardinality == "*") manySideCount++;
-                        else oneSideCount++;
-                    }
-                }
-
-                // Determine role based on relationship patterns
-                if (info.ConnectionCount == 0)
-                {
-                    info.Role = TableRole.Standalone;
-                }
-                else if (manySideCount > 0 && manySideCount >= oneSideCount)
-                {
-                    // Primarily on the "many" side = Fact table
-                    info.Role = TableRole.Fact;
-                }
-                else if (info.ConnectionCount >= 3 && manySideCount > 0)
-                {
-                    // Many connections with some "many" sides = Bridge table
-                    info.Role = TableRole.Bridge;
+                    int neighborCount = neighbors[table.TableName].Count(n => 
+                        referenceLayer.Any(r => r.TableName.Equals(n, StringComparison.OrdinalIgnoreCase)));
+                    if (neighborCount > 0)
+                        barycenters[table] /= neighborCount;
                 }
                 else
                 {
-                    // Primarily on the "one" side = Dimension table
-                    info.Role = TableRole.Dimension;
+                    // Tables with no neighbors get a high barycenter (placed at end)
+                    barycenters[table] = double.MaxValue / 2;
                 }
-
-                result[table] = info;
             }
-
-            return result;
+            
+            // Sort layer by barycenter
+            var sorted = layer.OrderBy(t => barycenters.TryGetValue(t, out var bc) ? bc : double.MaxValue / 2)
+                              .ThenBy(t => t.TableName)
+                              .ToList();
+            
+            layer.Clear();
+            layer.AddRange(sorted);
         }
 
         /// <summary>
-        /// Layouts a tier of tables in a row.
+        /// Builds a map of table name to all connected table names.
         /// </summary>
-        private double LayoutTier(List<ModelDiagramTableViewModel> tables, double startY,
-            double tableWidth, double tableHeight, double hSpacing, double padding)
-        {
-            if (tables.Count == 0) return startY;
-
-            double x = padding;
-            double maxHeight = tableHeight;
-
-            foreach (var table in tables.OrderBy(t => t.TableName))
-            {
-                table.X = x;
-                table.Y = startY;
-                table.Width = tableWidth;
-                table.Height = tableHeight;
-                x += tableWidth + hSpacing;
-            }
-
-            return startY + maxHeight;
-        }
-
-        /// <summary>
-        /// Layouts a tier of tables centered relative to the widest tier.
-        /// </summary>
-        private double LayoutTierCentered(List<ModelDiagramTableViewModel> tables, double startY,
-            double tableWidth, double tableHeight, double hSpacing, double padding, int maxColsReference)
-        {
-            if (tables.Count == 0) return startY;
-
-            // Calculate offset to center this tier
-            double maxWidth = maxColsReference * (tableWidth + hSpacing) - hSpacing;
-            double thisWidth = tables.Count * (tableWidth + hSpacing) - hSpacing;
-            double offsetX = padding + Math.Max(0, (maxWidth - thisWidth) / 2);
-
-            double x = offsetX;
-            foreach (var table in tables.OrderBy(t => t.TableName))
-            {
-                table.X = x;
-                table.Y = startY;
-                table.Width = tableWidth;
-                table.Height = tableHeight;
-                x += tableWidth + hSpacing;
-            }
-
-            return startY + tableHeight;
-        }
-
-        /// <summary>
-        /// Builds a map of table name to connected table names.
-        /// </summary>
-        private Dictionary<string, HashSet<string>> BuildRelationshipMap()
+        private Dictionary<string, HashSet<string>> BuildNeighborMap()
         {
             var map = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-
+            
+            foreach (var table in Tables)
+            {
+                map[table.TableName] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+            
             foreach (var rel in Relationships)
             {
-                if (!map.ContainsKey(rel.FromTable))
-                    map[rel.FromTable] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                if (!map.ContainsKey(rel.ToTable))
-                    map[rel.ToTable] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                map[rel.FromTable].Add(rel.ToTable);
-                map[rel.ToTable].Add(rel.FromTable);
+                if (map.ContainsKey(rel.FromTable))
+                    map[rel.FromTable].Add(rel.ToTable);
+                if (map.ContainsKey(rel.ToTable))
+                    map[rel.ToTable].Add(rel.FromTable);
             }
-
+            
             return map;
+        }
+
+        /// <summary>
+        /// Assigns X coordinates to tables, trying to align connected tables (Sugiyama Step 5).
+        /// Uses barycenter alignment with priority to minimize total edge length.
+        /// </summary>
+        private void AssignCoordinates(List<List<ModelDiagramTableViewModel>> layers,
+            double tableWidth, double tableHeight, double hSpacing, double vSpacing, double padding)
+        {
+            var neighbors = BuildNeighborMap();
+            
+            // First pass: simple left-to-right placement
+            for (int layerIndex = 0; layerIndex < layers.Count; layerIndex++)
+            {
+                var layer = layers[layerIndex];
+                double y = padding + layerIndex * (tableHeight + vSpacing);
+                double x = padding;
+                
+                foreach (var table in layer)
+                {
+                    table.X = x;
+                    table.Y = y;
+                    table.Width = tableWidth;
+                    table.Height = tableHeight;
+                    x += tableWidth + hSpacing;
+                }
+            }
+            
+            // Second pass: adjust X positions based on connected tables (Brandes-Köpf inspired)
+            // Pull tables toward their connected tables in adjacent layers
+            const int refinementIterations = 3;
+            
+            for (int iter = 0; iter < refinementIterations; iter++)
+            {
+                // Downward pass: align with upper neighbors
+                for (int layerIndex = 1; layerIndex < layers.Count; layerIndex++)
+                {
+                    AdjustLayerPositions(layers[layerIndex], layers[layerIndex - 1], neighbors, tableWidth, hSpacing, padding);
+                }
+                
+                // Upward pass: align with lower neighbors
+                for (int layerIndex = layers.Count - 2; layerIndex >= 0; layerIndex--)
+                {
+                    AdjustLayerPositions(layers[layerIndex], layers[layerIndex + 1], neighbors, tableWidth, hSpacing, padding);
+                }
+            }
+            
+            // Final centering: center all layers relative to the widest layer
+            CenterAllLayers(layers, tableWidth, hSpacing, padding);
+        }
+
+        /// <summary>
+        /// Adjusts positions of tables in a layer to align with connected tables.
+        /// </summary>
+        private void AdjustLayerPositions(List<ModelDiagramTableViewModel> layer,
+            List<ModelDiagramTableViewModel> referenceLayer,
+            Dictionary<string, HashSet<string>> neighbors,
+            double tableWidth, double hSpacing, double padding)
+        {
+            // Calculate target X for each table based on average neighbor position
+            var targetX = new Dictionary<ModelDiagramTableViewModel, double>();
+            
+            foreach (var table in layer)
+            {
+                if (neighbors.TryGetValue(table.TableName, out var tableNeighbors))
+                {
+                    var connectedInRef = referenceLayer
+                        .Where(r => tableNeighbors.Contains(r.TableName))
+                        .ToList();
+                    
+                    if (connectedInRef.Any())
+                    {
+                        // Target is average center X of connected tables
+                        targetX[table] = connectedInRef.Average(t => t.X + tableWidth / 2) - tableWidth / 2;
+                    }
+                }
+            }
+            
+            // Sort layer by current X position
+            var sortedLayer = layer.OrderBy(t => t.X).ToList();
+            
+            // Adjust positions while maintaining order and minimum spacing
+            for (int i = 0; i < sortedLayer.Count; i++)
+            {
+                var table = sortedLayer[i];
+                double minX = (i == 0) ? padding : sortedLayer[i - 1].X + tableWidth + hSpacing;
+                
+                if (targetX.TryGetValue(table, out double target))
+                {
+                    // Move toward target, but not past minimum
+                    double newX = Math.Max(minX, target);
+                    
+                    // Don't move too far (dampen to avoid oscillation)
+                    double maxMove = (tableWidth + hSpacing) / 2;
+                    double move = Math.Min(Math.Abs(newX - table.X), maxMove);
+                    if (newX > table.X)
+                        table.X = Math.Max(minX, table.X + move);
+                    else if (newX < table.X)
+                        table.X = Math.Max(minX, table.X - move);
+                }
+                else
+                {
+                    // No target - just ensure minimum spacing
+                    if (table.X < minX)
+                        table.X = minX;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Centers all layers relative to the widest layer.
+        /// </summary>
+        private void CenterAllLayers(List<List<ModelDiagramTableViewModel>> layers,
+            double tableWidth, double hSpacing, double padding)
+        {
+            if (!layers.Any()) return;
+            
+            // Find the widest layer
+            double maxWidth = 0;
+            foreach (var layer in layers)
+            {
+                if (layer.Any())
+                {
+                    double layerWidth = layer.Max(t => t.X + tableWidth) - layer.Min(t => t.X);
+                    maxWidth = Math.Max(maxWidth, layerWidth);
+                }
+            }
+            
+            // Center each layer
+            foreach (var layer in layers)
+            {
+                if (!layer.Any()) continue;
+                
+                double layerWidth = layer.Max(t => t.X + tableWidth) - layer.Min(t => t.X);
+                double offset = (maxWidth - layerWidth) / 2;
+                double minX = layer.Min(t => t.X);
+                double targetMinX = padding + offset;
+                double shift = targetMinX - minX;
+                
+                foreach (var table in layer)
+                {
+                    table.X += shift;
+                }
+            }
         }
 
         /// <summary>
@@ -1082,6 +1217,9 @@ namespace DaxStudio.UI.ViewModels
         /// </summary>
         public void RefreshLayout()
         {
+            // Update relationship visibility based on table visibility
+            UpdateRelationshipVisibility();
+            
             // Update relationship line positions
             foreach (var rel in Relationships)
             {
@@ -1112,6 +1250,20 @@ namespace DaxStudio.UI.ViewModels
                 {
                     rel.UpdatePath();
                 }
+            }
+        }
+
+        /// <summary>
+        /// Updates relationship visibility based on connected table visibility.
+        /// Relationships are hidden if either connected table is hidden.
+        /// </summary>
+        private void UpdateRelationshipVisibility()
+        {
+            foreach (var rel in Relationships)
+            {
+                bool fromVisible = rel.FromTableViewModel != null && !rel.FromTableViewModel.IsHidden;
+                bool toVisible = rel.ToTableViewModel != null && !rel.ToTableViewModel.IsHidden;
+                rel.IsVisible = fromVisible && toVisible;
             }
         }
 
@@ -1868,18 +2020,13 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
-        /// Event to request navigation to a table in the metadata pane.
-        /// </summary>
-        public event EventHandler<string> NavigateToMetadataRequested;
-
-        /// <summary>
         /// Navigates to the selected table in the metadata pane.
         /// </summary>
         public void JumpToMetadataPane()
         {
             if (_selectedTable != null)
             {
-                NavigateToMetadataRequested?.Invoke(this, _selectedTable.TableName);
+                _eventAggregator.PublishOnUIThreadAsync(new NavigateToMetadataItemEvent(_selectedTable.TableName));
             }
         }
 
@@ -2072,7 +2219,7 @@ namespace DaxStudio.UI.ViewModels
     {
         private readonly ADOTabularTable _table;
 
-        public ModelDiagramTableViewModel(ADOTabularTable table, bool showHiddenObjects)
+        public ModelDiagramTableViewModel(ADOTabularTable table, bool showHiddenObjects, IMetadataProvider metadataProvider, IGlobalOptions options)
         {
             _table = table;
             Columns = new BindableCollection<ModelDiagramColumnViewModel>(
@@ -2080,7 +2227,7 @@ namespace DaxStudio.UI.ViewModels
                     .Where(c => c.Contents != "RowNumber" && (showHiddenObjects || c.IsVisible))
                     .OrderBy(c => c.ObjectType == ADOTabularObjectType.Column ? 0 : 1) // Columns first, then measures
                     .ThenBy(c => c.Caption)
-                    .Select(c => new ModelDiagramColumnViewModel(c)));
+                    .Select(c => new ModelDiagramColumnViewModel(c, metadataProvider, options)));
         }
 
         public string TableName => _table.Name;
@@ -2381,10 +2528,18 @@ namespace DaxStudio.UI.ViewModels
     public class ModelDiagramColumnViewModel : PropertyChangedBase
     {
         private readonly ADOTabularColumn _column;
+        private readonly IMetadataProvider _metadataProvider;
+        private readonly IGlobalOptions _options;
+        private List<string> _sampleData;
+        private bool _updatingSampleData;
+        private const int SAMPLE_ROWS = 10;
 
-        public ModelDiagramColumnViewModel(ADOTabularColumn column)
+        public ModelDiagramColumnViewModel(ADOTabularColumn column, IMetadataProvider metadataProvider, IGlobalOptions options)
         {
             _column = column;
+            _metadataProvider = metadataProvider;
+            _options = options;
+            _sampleData = new List<string>();
         }
 
         public string ColumnName => _column.Name;
@@ -2506,6 +2661,12 @@ namespace DaxStudio.UI.ViewModels
         {
             get
             {
+                // Trigger sample data loading if enabled and not already loaded
+                if (ShowSampleData && !HasSampleData && !_updatingSampleData)
+                {
+                    LoadSampleDataAsync();
+                }
+
                 var sb = new System.Text.StringBuilder();
                 sb.AppendLine(Caption);
                 
@@ -2525,6 +2686,42 @@ namespace DaxStudio.UI.ViewModels
                 if (!string.IsNullOrEmpty(DataTypeName))
                     sb.AppendLine($"Data Type: {DataTypeName}");
                 
+                // Add format string if available
+                if (!string.IsNullOrEmpty(FormatString))
+                    sb.AppendLine($"Format: {FormatString}");
+                
+                // Add statistics from metadata (like the metadata pane tooltip)
+                if (!IsMeasure && !IsHierarchy)
+                {
+                    if (DistinctValues > 0)
+                        sb.AppendLine($"Distinct Values: {DistinctValues:N0}");
+                    
+                    if (!string.IsNullOrEmpty(MinValue))
+                        sb.AppendLine($"Min Value: {MinValue}");
+                    
+                    if (!string.IsNullOrEmpty(MaxValue))
+                        sb.AppendLine($"Max Value: {MaxValue}");
+                }
+                
+                // Add sample data if available and enabled
+                if (ShowSampleData)
+                {
+                    if (_updatingSampleData)
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("Sample Data: Loading...");
+                    }
+                    else if (HasSampleData)
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("Sample Data:");
+                        foreach (var sample in _sampleData)
+                        {
+                            sb.AppendLine($"  {sample}");
+                        }
+                    }
+                }
+                
                 if (!IsVisible)
                     sb.AppendLine("👁 Hidden");
                     
@@ -2537,6 +2734,58 @@ namespace DaxStudio.UI.ViewModels
                 return sb.ToString().TrimEnd();
             }
         }
+
+        /// <summary>
+        /// Whether to show sample data in the tooltip (based on options).
+        /// </summary>
+        private bool ShowSampleData => _options?.ShowTooltipSampleData == true 
+                                     && !IsMeasure 
+                                     && !IsHierarchy
+                                     && _column.ObjectType == ADOTabularObjectType.Column;
+
+        /// <summary>
+        /// Whether sample data has been loaded.
+        /// </summary>
+        private bool HasSampleData => _sampleData != null && _sampleData.Count > 0;
+
+        /// <summary>
+        /// Asynchronously loads sample data for the column.
+        /// This is intentionally async void as it's a fire-and-forget operation triggered by the Tooltip getter.
+        /// Errors are caught and logged to prevent application crashes.
+        /// </summary>
+        private async void LoadSampleDataAsync()
+        {
+            if (_metadataProvider == null || _updatingSampleData) return;
+            
+            _updatingSampleData = true;
+            
+            try
+            {
+                // Notify tooltip that we're loading (shows "Loading..." state)
+                NotifyOfPropertyChange(nameof(Tooltip));
+                
+                var samples = await _metadataProvider.GetColumnSampleData(_column, SAMPLE_ROWS).ConfigureAwait(false);
+                _sampleData = samples ?? new List<string>();
+            }
+            catch (Exception ex)
+            {
+                // Log but don't crash - sample data is not critical
+                Log.Warning(ex, "Error loading sample data for column {ColumnName}", ColumnName);
+                _sampleData = new List<string>();
+            }
+            finally
+            {
+                _updatingSampleData = false;
+                // Marshal back to UI thread for property change notification
+                await Application.Current.Dispatcher.InvokeAsync(() => NotifyOfPropertyChange(nameof(Tooltip)));
+            }
+        }
+
+        // Expose additional column metadata properties for tooltip
+        public string FormatString => _column.FormatString;
+        public long DistinctValues => _column.DistinctValues;
+        public string MinValue => _column.MinValue;
+        public string MaxValue => _column.MaxValue;
 
         private bool _showDataType;
         public bool ShowDataType
@@ -2588,9 +2837,19 @@ namespace DaxStudio.UI.ViewModels
         public string FromCardinality => _relationship.FromColumnMultiplicity == "*" ? "*" : "1";
 
         /// <summary>
+        /// Font size for the "From" cardinality - larger for * to make it more visible
+        /// </summary>
+        public double FromCardinalityFontSize => FromCardinality == "*" ? 16 : 12;
+
+        /// <summary>
         /// The "To" side cardinality symbol (1 or *)
         /// </summary>
         public string ToCardinality => _relationship.ToColumnMultiplicity == "*" ? "*" : "1";
+
+        /// <summary>
+        /// Font size for the "To" cardinality - larger for * to make it more visible
+        /// </summary>
+        public double ToCardinalityFontSize => ToCardinality == "*" ? 16 : 12;
 
         /// <summary>
         /// Tooltip for the "From" side cardinality.
@@ -2654,6 +2913,20 @@ namespace DaxStudio.UI.ViewModels
                                  $"Cardinality: {CardinalityText}\n" +
                                  $"Cross-filter: {_relationship.CrossFilterDirection}\n" +
                                  $"Active: {(IsActive ? "Yes" : "No")}";
+
+        #region Visibility
+
+        private bool _isVisible = true;
+        /// <summary>
+        /// Whether this relationship line should be visible (both connected tables are visible).
+        /// </summary>
+        public bool IsVisible
+        {
+            get => _isVisible;
+            set { _isVisible = value; NotifyOfPropertyChange(); }
+        }
+
+        #endregion
 
         #region Highlighting
 
@@ -2799,23 +3072,27 @@ namespace DaxStudio.UI.ViewModels
         public double ReverseFilterDirectionAngle => FilterDirectionAngle + 180;
 
         /// <summary>
-        /// Position for the "From" cardinality label (near start, offset along the curve).
+        /// Position for the "From" cardinality label (near start, offset based on edge type).
         /// </summary>
         public double FromCardinalityX
         {
             get
             {
-                bool isVertical = (_startEdge == EdgeType.Top || _startEdge == EdgeType.Bottom);
-                if (isVertical)
+                // Position based on which edge the line exits from
+                switch (_startEdge)
                 {
-                    // For vertical connections, position to the side
-                    return StartX + 5;
-                }
-                else
-                {
-                    // For horizontal connections, position along the line
-                    double offset = EndX > StartX ? 8 : -20;
-                    return StartX + offset;
+                    case EdgeType.Top:
+                    case EdgeType.Bottom:
+                        // Vertical edge - position to the right of the connection point
+                        return StartX + 4;
+                    case EdgeType.Left:
+                        // Left edge - position to the left
+                        return StartX - 28;
+                    case EdgeType.Right:
+                        // Right edge - position to the right
+                        return StartX + 6;
+                    default:
+                        return StartX + 5;
                 }
             }
         }
@@ -2824,40 +3101,47 @@ namespace DaxStudio.UI.ViewModels
         {
             get
             {
-                bool isVertical = (_startEdge == EdgeType.Top || _startEdge == EdgeType.Bottom);
-                if (isVertical)
+                // Position based on which edge the line exits from
+                switch (_startEdge)
                 {
-                    // For vertical connections, position along the line
-                    double offset = EndY > StartY ? 8 : -15;
-                    return StartY + offset;
-                }
-                else
-                {
-                    // For horizontal connections, position above/below
-                    double offset = EndY > StartY ? -15 : 5;
-                    return StartY + offset;
+                    case EdgeType.Top:
+                        // Top edge - position above the connection point
+                        return StartY - 28;
+                    case EdgeType.Bottom:
+                        // Bottom edge - position below the connection point
+                        return StartY + 6;
+                    case EdgeType.Left:
+                    case EdgeType.Right:
+                        // Horizontal edge - position above the line
+                        return StartY - 12;
+                    default:
+                        return StartY - 12;
                 }
             }
         }
 
         /// <summary>
-        /// Position for the "To" cardinality label (near end, offset along the curve).
+        /// Position for the "To" cardinality label (near end, offset based on edge type).
         /// </summary>
         public double ToCardinalityX
         {
             get
             {
-                bool isVertical = (_startEdge == EdgeType.Top || _startEdge == EdgeType.Bottom);
-                if (isVertical)
+                // Position based on which edge the line enters
+                switch (_endEdge)
                 {
-                    // For vertical connections, position to the side
-                    return EndX + 5;
-                }
-                else
-                {
-                    // For horizontal connections, position along the line
-                    double offset = EndX > StartX ? -20 : 8;
-                    return EndX + offset;
+                    case EdgeType.Top:
+                    case EdgeType.Bottom:
+                        // Vertical edge - position to the right of the connection point
+                        return EndX + 4;
+                    case EdgeType.Left:
+                        // Left edge - position to the left
+                        return EndX - 28;
+                    case EdgeType.Right:
+                        // Right edge - position to the right
+                        return EndX + 6;
+                    default:
+                        return EndX + 5;
                 }
             }
         }
@@ -2866,18 +3150,21 @@ namespace DaxStudio.UI.ViewModels
         {
             get
             {
-                bool isVertical = (_startEdge == EdgeType.Top || _startEdge == EdgeType.Bottom);
-                if (isVertical)
+                // Position based on which edge the line enters
+                switch (_endEdge)
                 {
-                    // For vertical connections, position along the line
-                    double offset = EndY > StartY ? -15 : 8;
-                    return EndY + offset;
-                }
-                else
-                {
-                    // For horizontal connections, position above/below
-                    double offset = EndY > StartY ? 5 : -15;
-                    return EndY + offset;
+                    case EdgeType.Top:
+                        // Top edge - position above the connection point
+                        return EndY - 28;
+                    case EdgeType.Bottom:
+                        // Bottom edge - position below the connection point
+                        return EndY + 6;
+                    case EdgeType.Left:
+                    case EdgeType.Right:
+                        // Horizontal edge - position above the line
+                        return EndY - 12;
+                    default:
+                        return EndY - 12;
                 }
             }
         }
@@ -2922,6 +3209,13 @@ namespace DaxStudio.UI.ViewModels
         /// </summary>
         public void UpdatePath()
         {
+            // Null check to prevent NullReferenceException
+            if (_fromTable == null || _toTable == null)
+            {
+                _isPathInitialized = false;
+                return;
+            }
+
             // Calculate distances for each edge combination and pick the shortest
             var fromCenter = new Point(_fromTable.CenterX, _fromTable.CenterY);
             var toCenter = new Point(_toTable.CenterX, _toTable.CenterY);
@@ -3069,26 +3363,6 @@ namespace DaxStudio.UI.ViewModels
         public double Height { get; set; }
         public bool IsCollapsed { get; set; }
         public double ExpandedHeight { get; set; }
-    }
-
-    /// <summary>
-    /// Information about a table's role in the model for layout purposes.
-    /// </summary>
-    internal class TableLayoutInfo
-    {
-        public int ConnectionCount { get; set; }
-        public TableRole Role { get; set; }
-    }
-
-    /// <summary>
-    /// Role of a table in the data model.
-    /// </summary>
-    internal enum TableRole
-    {
-        Dimension,  // Lookup table, typically on the "one" side
-        Fact,       // Transaction table, typically on the "many" side
-        Bridge,     // Many-to-many bridge table
-        Standalone  // No relationships
     }
 
     #endregion

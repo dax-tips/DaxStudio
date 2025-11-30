@@ -1356,6 +1356,7 @@
       <SubType>Designer</SubType>
     </None>
     <Compile Include="Events\CloseTraceWindowEvent.cs" />
+    <Compile Include="Events\NavigateToMetadataItemEvent.cs" />
     <None Include="ApplicationInsights.config" />
     <None Include="DaxStudio.UI.ruleset" />
     <None Include="Properties\Settings.settings">

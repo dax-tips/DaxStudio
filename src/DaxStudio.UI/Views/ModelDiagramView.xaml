@@ -431,11 +431,18 @@
 
             <!-- Relationship Line Template -->
             <DataTemplate x:Key="RelationshipLineTemplate" DataType="{x:Type vm:ModelDiagramRelationshipViewModel}">
-                <Canvas Visibility="{Binding HasValidPositions, Converter={StaticResource BoolToVisibilityConverter}}">
+                <Canvas>
                     <Canvas.Style>
                         <Style TargetType="Canvas">
+                            <Setter Property="Visibility" Value="Visible"/>
                             <Setter Property="Opacity" Value="1"/>
                             <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasValidPositions}" Value="False">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsVisible}" Value="False">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
                                 <DataTrigger Binding="{Binding IsDimmed}" Value="True">
                                     <Setter Property="Opacity" Value="0.2"/>
                                 </DataTrigger>
@@ -487,10 +494,14 @@
                             CornerRadius="3"
                             Padding="3,1"
                             BorderThickness="1"
-                            BorderBrush="#888888">
+                            BorderBrush="#888888"
+                            MinWidth="16"
+                            MinHeight="18">
                         <TextBlock Text="{Binding FromCardinality}"
-                                   FontSize="12"
+                                   FontSize="{Binding FromCardinalityFontSize}"
                                    FontWeight="Bold"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
                                    Foreground="{DynamicResource Theme.Brush.Default.Fore}"
                                    ToolTip="{Binding FromCardinalityTooltip}"/>
                     </Border>
@@ -502,10 +513,14 @@
                             CornerRadius="3"
                             Padding="3,1"
                             BorderThickness="1"
-                            BorderBrush="#888888">
+                            BorderBrush="#888888"
+                            MinWidth="16"
+                            MinHeight="18">
                         <TextBlock Text="{Binding ToCardinality}"
-                                   FontSize="12"
+                                   FontSize="{Binding ToCardinalityFontSize}"
                                    FontWeight="Bold"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
                                    Foreground="{DynamicResource Theme.Brush.Default.Fore}"
                                    ToolTip="{Binding ToCardinalityTooltip}"/>
                     </Border>

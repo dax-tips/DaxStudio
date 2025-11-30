@@ -25,6 +25,7 @@ namespace DaxStudio.UI.Interfaces
 
         Task UpdateColumnSampleData(ITreeviewColumn column, int sampleSize);
         Task UpdateColumnBasicStats(ITreeviewColumn column);
+        Task<List<string>> GetColumnSampleData(ADOTabularColumn column, int sampleSize);
         bool IsPowerPivot { get; }
         bool IsPowerBIorSSDT { get; }
         bool IsConnected { get; }
