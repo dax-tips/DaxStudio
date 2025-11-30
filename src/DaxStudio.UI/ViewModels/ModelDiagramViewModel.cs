@@ -643,56 +643,21 @@ namespace DaxStudio.UI.ViewModels
         {
             if (Tables.Count == 0) return;
 
-            const double tableWidth = 220;
-            const double tableHeight = 200;
-            const double horizontalSpacing = 150;
-            const double verticalSpacing = 120;
-            const double padding = 60;
+            const double tableWidth = 200;
+            const double tableHeight = 180;
+            const double horizontalSpacing = 80;
+            const double verticalSpacing = 100;
+            const double padding = 40;
 
-            // Build relationship map and categorize tables
-            var relationshipMap = BuildRelationshipMap();
-            var tableInfo = CategorizeTablesForLayout(relationshipMap);
-
-            // Separate into tiers based on table role
-            var factTables = tableInfo.Where(t => t.Value.Role == TableRole.Fact).Select(t => t.Key).ToList();
-            var bridgeTables = tableInfo.Where(t => t.Value.Role == TableRole.Bridge).Select(t => t.Key).ToList();
-            var dimensionTables = tableInfo.Where(t => t.Value.Role == TableRole.Dimension).Select(t => t.Key).ToList();
-            var standaloneTables = tableInfo.Where(t => t.Value.Role == TableRole.Standalone).Select(t => t.Key).ToList();
-
-            // Layout in tiers: Dimensions at top, Bridge/other in middle, Facts at bottom
-            double currentY = padding;
-
-            // Tier 1: Dimension tables (top)
-            if (dimensionTables.Count > 0)
-            {
-                currentY = LayoutTier(dimensionTables, currentY, tableWidth, tableHeight, horizontalSpacing, padding);
-                currentY += verticalSpacing;
-            }
-
-            // Tier 2: Bridge tables (middle)
-            if (bridgeTables.Count > 0)
-            {
-                currentY = LayoutTier(bridgeTables, currentY, tableWidth, tableHeight, horizontalSpacing, padding);
-                currentY += verticalSpacing;
-            }
-
-            // Tier 3: Fact tables (bottom center)
-            if (factTables.Count > 0)
-            {
-                currentY = LayoutTierCentered(factTables, currentY, tableWidth, tableHeight, horizontalSpacing, padding, 
-                    Math.Max(dimensionTables.Count, bridgeTables.Count));
-                currentY += verticalSpacing;
-            }
-
-            // Tier 4: Standalone tables (bottom, if any)
-            if (standaloneTables.Count > 0)
-            {
-                currentY = LayoutTier(standaloneTables, currentY, tableWidth, tableHeight, horizontalSpacing, padding);
-            }
+            // Step 1: Analyze relationships to find fact tables and dimension chains
+            var analysis = AnalyzeModelStructure();
+            
+            // Step 2: Layout based on star/snowflake schema pattern
+            LayoutStarSchema(analysis, tableWidth, tableHeight, horizontalSpacing, verticalSpacing, padding);
 
             // Calculate canvas size to fit all tables
-            var maxX = Tables.Max(t => t.X + t.Width);
-            var maxY = Tables.Max(t => t.Y + t.Height);
+            var maxX = Tables.Any() ? Tables.Max(t => t.X + t.Width) : 100;
+            var maxY = Tables.Any() ? Tables.Max(t => t.Y + t.Height) : 100;
             CanvasWidth = Math.Max(100, maxX + padding);
             CanvasHeight = Math.Max(100, maxY + padding);
 
@@ -701,6 +666,283 @@ namespace DaxStudio.UI.ViewModels
             {
                 rel.UpdatePath();
             }
+        }
+
+        /// <summary>
+        /// Analyzes the model structure to identify fact tables, dimension chains, and standalone tables.
+        /// </summary>
+        private ModelStructureAnalysis AnalyzeModelStructure()
+        {
+            var analysis = new ModelStructureAnalysis();
+            
+            // Count many-side relationships for each table
+            var manySideCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var oneSideCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            
+            foreach (var table in Tables)
+            {
+                manySideCounts[table.TableName] = 0;
+                oneSideCounts[table.TableName] = 0;
+            }
+            
+            foreach (var rel in Relationships)
+            {
+                // FromCardinality is the cardinality of the FromTable side
+                if (rel.FromCardinality == "*" || rel.FromCardinality == "M")
+                    manySideCounts[rel.FromTable] = manySideCounts.GetValueOrDefault(rel.FromTable) + 1;
+                else
+                    oneSideCounts[rel.FromTable] = oneSideCounts.GetValueOrDefault(rel.FromTable) + 1;
+                    
+                if (rel.ToCardinality == "*" || rel.ToCardinality == "M")
+                    manySideCounts[rel.ToTable] = manySideCounts.GetValueOrDefault(rel.ToTable) + 1;
+                else
+                    oneSideCounts[rel.ToTable] = oneSideCounts.GetValueOrDefault(rel.ToTable) + 1;
+            }
+            
+            // Identify fact tables: tables with multiple many-side relationships
+            // The table with the MOST many-side relationships is likely the main fact table
+            var factCandidates = Tables
+                .Where(t => manySideCounts.GetValueOrDefault(t.TableName) >= 2)
+                .OrderByDescending(t => manySideCounts.GetValueOrDefault(t.TableName))
+                .ThenByDescending(t => oneSideCounts.GetValueOrDefault(t.TableName))
+                .ToList();
+            
+            if (factCandidates.Any())
+            {
+                analysis.FactTables.AddRange(factCandidates);
+            }
+            else
+            {
+                // No clear fact table - find table with most total relationships
+                var mostConnected = Tables
+                    .OrderByDescending(t => manySideCounts.GetValueOrDefault(t.TableName) + oneSideCounts.GetValueOrDefault(t.TableName))
+                    .FirstOrDefault();
+                if (mostConnected != null)
+                    analysis.FactTables.Add(mostConnected);
+            }
+            
+            // Build dimension chains (e.g., Product -> Subcategory -> Category)
+            var processedTables = new HashSet<string>(analysis.FactTables.Select(f => f.TableName), StringComparer.OrdinalIgnoreCase);
+            
+            foreach (var factTable in analysis.FactTables)
+            {
+                // Find all dimensions directly connected to this fact table
+                foreach (var rel in Relationships)
+                {
+                    string dimTableName = null;
+                    
+                    // Find dimension tables (on the "one" side of relationship with fact)
+                    if (rel.FromTable.Equals(factTable.TableName, StringComparison.OrdinalIgnoreCase) && 
+                        (rel.ToCardinality == "1" || rel.ToCardinality == ""))
+                    {
+                        dimTableName = rel.ToTable;
+                    }
+                    else if (rel.ToTable.Equals(factTable.TableName, StringComparison.OrdinalIgnoreCase) && 
+                             (rel.FromCardinality == "1" || rel.FromCardinality == ""))
+                    {
+                        dimTableName = rel.FromTable;
+                    }
+                    
+                    if (dimTableName != null && !processedTables.Contains(dimTableName))
+                    {
+                        // Build the chain starting from this dimension
+                        var chain = BuildDimensionChain(dimTableName, processedTables);
+                        if (chain.Count > 0)
+                        {
+                            analysis.DimensionChains.Add(chain);
+                            foreach (var t in chain)
+                                processedTables.Add(t.TableName);
+                        }
+                    }
+                }
+            }
+            
+            // Any remaining tables are standalone
+            foreach (var table in Tables)
+            {
+                if (!processedTables.Contains(table.TableName))
+                {
+                    analysis.StandaloneTables.Add(table);
+                    processedTables.Add(table.TableName);
+                }
+            }
+            
+            return analysis;
+        }
+        
+        /// <summary>
+        /// Builds a dimension chain by following one-to-many relationships outward.
+        /// E.g., Product -> Product Subcategory -> Product Category
+        /// </summary>
+        private List<ModelDiagramTableViewModel> BuildDimensionChain(string startTableName, HashSet<string> excludeTables)
+        {
+            var chain = new List<ModelDiagramTableViewModel>();
+            var visited = new HashSet<string>(excludeTables, StringComparer.OrdinalIgnoreCase);
+            
+            var startTable = Tables.FirstOrDefault(t => t.TableName.Equals(startTableName, StringComparison.OrdinalIgnoreCase));
+            if (startTable == null) return chain;
+            
+            // BFS to find connected dimension tables
+            var queue = new Queue<ModelDiagramTableViewModel>();
+            queue.Enqueue(startTable);
+            visited.Add(startTableName);
+            
+            while (queue.Count > 0)
+            {
+                var current = queue.Dequeue();
+                chain.Add(current);
+                
+                // Find tables connected via one-to-one or one-to-many where current is on "many" side
+                foreach (var rel in Relationships)
+                {
+                    string nextTableName = null;
+                    
+                    // Current table is on "many" side, look for the "one" side
+                    if (rel.FromTable.Equals(current.TableName, StringComparison.OrdinalIgnoreCase) &&
+                        (rel.FromCardinality == "*" || rel.FromCardinality == "M") &&
+                        !visited.Contains(rel.ToTable))
+                    {
+                        nextTableName = rel.ToTable;
+                    }
+                    else if (rel.ToTable.Equals(current.TableName, StringComparison.OrdinalIgnoreCase) &&
+                             (rel.ToCardinality == "*" || rel.ToCardinality == "M") &&
+                             !visited.Contains(rel.FromTable))
+                    {
+                        nextTableName = rel.FromTable;
+                    }
+                    
+                    if (nextTableName != null)
+                    {
+                        var nextTable = Tables.FirstOrDefault(t => t.TableName.Equals(nextTableName, StringComparison.OrdinalIgnoreCase));
+                        if (nextTable != null)
+                        {
+                            visited.Add(nextTableName);
+                            queue.Enqueue(nextTable);
+                        }
+                    }
+                }
+            }
+            
+            return chain;
+        }
+        
+        /// <summary>
+        /// Layouts tables in a star/snowflake schema pattern.
+        /// </summary>
+        private void LayoutStarSchema(ModelStructureAnalysis analysis, double tableWidth, double tableHeight, 
+            double hSpacing, double vSpacing, double padding)
+        {
+            // Calculate the center position for fact tables
+            int totalDimensions = analysis.DimensionChains.Count + analysis.StandaloneTables.Count;
+            double centerX = padding + (totalDimensions / 2.0) * (tableWidth + hSpacing);
+            double factY = padding + vSpacing + tableHeight; // Leave room for dimensions above
+            
+            // Position fact table(s) in the center
+            double factX = centerX - (analysis.FactTables.Count * (tableWidth + hSpacing) / 2);
+            foreach (var factTable in analysis.FactTables)
+            {
+                factTable.X = factX;
+                factTable.Y = factY;
+                factTable.Width = tableWidth;
+                factTable.Height = tableHeight;
+                factX += tableWidth + hSpacing;
+            }
+            
+            // Layout dimension chains around the fact table
+            // We'll arrange them in a row above the fact table, with chains extending upward
+            double dimX = padding;
+            double dimBaseY = padding;
+            
+            // Sort chains: longer chains first, then by first table name
+            var sortedChains = analysis.DimensionChains
+                .OrderByDescending(c => c.Count)
+                .ThenBy(c => c.FirstOrDefault()?.TableName ?? "")
+                .ToList();
+            
+            foreach (var chain in sortedChains)
+            {
+                // Layout chain horizontally, connected tables next to each other
+                double chainX = dimX;
+                foreach (var table in chain)
+                {
+                    table.X = chainX;
+                    table.Y = dimBaseY;
+                    table.Width = tableWidth;
+                    table.Height = tableHeight;
+                    chainX += tableWidth + hSpacing / 2; // Tighter spacing within chains
+                }
+                
+                // Move to next position (account for chain width)
+                dimX = chainX + hSpacing / 2;
+            }
+            
+            // Layout standalone tables in a row below the fact table
+            double standaloneY = factY + tableHeight + vSpacing;
+            double standaloneX = padding;
+            
+            foreach (var table in analysis.StandaloneTables.OrderBy(t => t.TableName))
+            {
+                table.X = standaloneX;
+                table.Y = standaloneY;
+                table.Width = tableWidth;
+                table.Height = tableHeight;
+                standaloneX += tableWidth + hSpacing;
+            }
+            
+            // If there are many standalone tables, also check if we need a second row
+            // and recenter everything
+            RecenterLayout(analysis, tableWidth, hSpacing, padding);
+        }
+        
+        /// <summary>
+        /// Recenters the layout so fact tables are visually centered.
+        /// </summary>
+        private void RecenterLayout(ModelStructureAnalysis analysis, double tableWidth, double hSpacing, double padding)
+        {
+            if (!Tables.Any()) return;
+            
+            // Find the horizontal extent of all tables
+            double minX = Tables.Min(t => t.X);
+            double maxX = Tables.Max(t => t.X + t.Width);
+            double totalWidth = maxX - minX;
+            
+            // Find the center of fact tables
+            if (analysis.FactTables.Any())
+            {
+                double factCenterX = analysis.FactTables.Average(t => t.X + t.Width / 2);
+                double layoutCenterX = minX + totalWidth / 2;
+                
+                // If fact tables aren't centered, shift everything
+                double shift = factCenterX - layoutCenterX;
+                if (Math.Abs(shift) > 10)
+                {
+                    foreach (var table in Tables)
+                    {
+                        table.X -= shift;
+                    }
+                }
+            }
+            
+            // Ensure all tables have positive coordinates
+            double minXAfter = Tables.Min(t => t.X);
+            if (minXAfter < padding)
+            {
+                double adjust = padding - minXAfter;
+                foreach (var table in Tables)
+                {
+                    table.X += adjust;
+                }
+            }
+        }
+        
+        /// <summary>
+        /// Analysis results for model structure.
+        /// </summary>
+        private class ModelStructureAnalysis
+        {
+            public List<ModelDiagramTableViewModel> FactTables { get; } = new List<ModelDiagramTableViewModel>();
+            public List<List<ModelDiagramTableViewModel>> DimensionChains { get; } = new List<List<ModelDiagramTableViewModel>>();
+            public List<ModelDiagramTableViewModel> StandaloneTables { get; } = new List<ModelDiagramTableViewModel>();
         }
 
         /// <summary>
