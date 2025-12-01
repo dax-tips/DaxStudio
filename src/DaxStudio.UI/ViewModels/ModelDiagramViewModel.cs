@@ -282,6 +282,25 @@ namespace DaxStudio.UI.ViewModels
             }
         }
 
+        private bool _sortKeyColumnsFirst = false;
+        /// <summary>
+        /// Whether to sort related columns first in the column list.
+        /// </summary>
+        public bool SortKeyColumnsFirst
+        {
+            get => _sortKeyColumnsFirst;
+            set
+            {
+                _sortKeyColumnsFirst = value;
+                NotifyOfPropertyChange();
+                // Re-sort columns in all tables
+                foreach (var table in Tables)
+                {
+                    table.UpdateColumnSort(_sortKeyColumnsFirst);
+                }
+            }
+        }
+
         private int _tableFilter = 0;
         /// <summary>
         /// Filter tables by type: 0=All, 1=Date Tables Only
@@ -598,7 +617,7 @@ namespace DaxStudio.UI.ViewModels
                 {
                     if (!ShowHiddenObjects && !table.IsVisible) continue;
 
-                    var tableVm = new ModelDiagramTableViewModel(table, ShowHiddenObjects, _metadataProvider, _options);
+                    var tableVm = new ModelDiagramTableViewModel(table, ShowHiddenObjects, _metadataProvider, _options, _sortKeyColumnsFirst);
                     Tables.Add(tableVm);
                 }
 
@@ -2232,16 +2251,98 @@ namespace DaxStudio.UI.ViewModels
     public class ModelDiagramTableViewModel : PropertyChangedBase
     {
         private readonly ADOTabularTable _table;
+        private readonly bool _showHiddenObjects;
+        private readonly IMetadataProvider _metadataProvider;
+        private readonly IGlobalOptions _options;
+        private bool _sortKeyColumnsFirst = false;
 
-        public ModelDiagramTableViewModel(ADOTabularTable table, bool showHiddenObjects, IMetadataProvider metadataProvider, IGlobalOptions options)
+        public ModelDiagramTableViewModel(ADOTabularTable table, bool showHiddenObjects, IMetadataProvider metadataProvider, IGlobalOptions options, bool sortKeyColumnsFirst = false)
         {
             _table = table;
-            Columns = new BindableCollection<ModelDiagramColumnViewModel>(
-                table.Columns
-                    .Where(c => c.Contents != "RowNumber" && (showHiddenObjects || c.IsVisible))
+            _showHiddenObjects = showHiddenObjects;
+            _metadataProvider = metadataProvider;
+            _options = options;
+            _sortKeyColumnsFirst = sortKeyColumnsFirst;
+            Columns = new BindableCollection<ModelDiagramColumnViewModel>(GetSortedColumns());
+        }
+
+        /// <summary>
+        /// Gets columns sorted based on the current sort setting.
+        /// </summary>
+        private IEnumerable<ModelDiagramColumnViewModel> GetSortedColumns()
+        {
+            var filtered = _table.Columns
+                .Where(c => c.Contents != "RowNumber" && (_showHiddenObjects || c.IsVisible));
+
+            IEnumerable<ADOTabularColumn> sorted;
+            if (_sortKeyColumnsFirst)
+            {
+                sorted = filtered
                     .OrderBy(c => c.ObjectType == ADOTabularObjectType.Column ? 0 : 1) // Columns first, then measures
+                    .ThenByDescending(c => IsRelationshipColumn(c.Name)) // Related columns (used in relationships) first
+                    .ThenBy(c => c.Caption);
+            }
+            else
+            {
+                sorted = filtered
+                    .OrderBy(c => c.ObjectType == ADOTabularObjectType.Column ? 0 : 1) // Columns first, then measures
+                    .ThenBy(c => c.Caption);
+            }
+
+            // Create ViewModels and set IsRelationshipColumn
+            return sorted.Select(c => 
+            {
+                var vm = new ModelDiagramColumnViewModel(c, _metadataProvider, _options);
+                vm.IsRelationshipColumn = IsRelationshipColumn(c.Name);
+                return vm;
+            });
+        }
+
+        /// <summary>
+        /// Checks if a column is used in a relationship (foreign key or referenced key).
+        /// </summary>
+        private bool IsRelationshipColumn(string columnName)
+        {
+            // Check if this column participates in any relationship (either side)
+            return _table.Model?.Relationships?.Any(r => 
+                (r.FromTable?.Name == _table.Name && r.FromColumn == columnName) ||
+                (r.ToTable?.Name == _table.Name && r.ToColumn == columnName)) ?? false;
+        }
+
+        /// <summary>
+        /// Updates the column sort order.
+        /// </summary>
+        public void UpdateColumnSort(bool sortKeyColumnsFirst)
+        {
+            _sortKeyColumnsFirst = sortKeyColumnsFirst;
+            
+            // Re-sort existing columns (preserves IsRelationshipColumn that was set during load)
+            List<ModelDiagramColumnViewModel> sortedColumns;
+            if (sortKeyColumnsFirst)
+            {
+                sortedColumns = Columns
+                    .OrderBy(c => c.ObjectType == ADOTabularObjectType.Column ? 0 : 1)
+                    .ThenByDescending(c => c.IsRelationshipColumn)
                     .ThenBy(c => c.Caption)
-                    .Select(c => new ModelDiagramColumnViewModel(c, metadataProvider, options)));
+                    .ToList();
+            }
+            else
+            {
+                sortedColumns = Columns
+                    .OrderBy(c => c.ObjectType == ADOTabularObjectType.Column ? 0 : 1)
+                    .ThenBy(c => c.Caption)
+                    .ToList();
+            }
+            
+            // Clear and re-add to force UI update
+            Columns.Clear();
+            foreach (var col in sortedColumns)
+            {
+                Columns.Add(col);
+            }
+            
+            NotifyOfPropertyChange(nameof(Columns));
+            NotifyOfPropertyChange(nameof(KeyColumns));
         }
 
         public string TableName => _table.Name;

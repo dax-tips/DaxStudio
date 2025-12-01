@@ -688,6 +688,15 @@
                     </StackPanel>
                 </ToggleButton>
                 
+                <ToggleButton DockPanel.Dock="Left" Style="{StaticResource TraceToggleButton}"
+                              IsChecked="{Binding SortKeyColumnsFirst, Mode=TwoWay}"
+                              ToolTip="Sort related columns first - columns used in relationships (then alphabetically)">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🔗" FontSize="12" Margin="0,0,4,0"/>
+                        <TextBlock>Related First</TextBlock>
+                    </StackPanel>
+                </ToggleButton>
+                
                 <!-- Search Box -->
                 <Border DockPanel.Dock="Left" 
                         Margin="8,4,4,4"

@@ -434,6 +434,11 @@ namespace DaxStudio.UI.Views
                 if (e.ClickCount == 2)
                 {
                     tableVm.ToggleCollapse();
+                    // Update relationships connected to this table
+                    if (DataContext is XmSqlErdViewModel erdVm)
+                    {
+                        erdVm.OnTablePositionChanged(tableVm);
+                    }
                     e.Handled = true;
                     return;
                 }
@@ -456,6 +461,11 @@ namespace DaxStudio.UI.Views
             if (sender is FrameworkElement element && element.DataContext is ErdTableViewModel tableVm)
             {
                 tableVm.ToggleCollapse();
+                // Update relationships connected to this table
+                if (DataContext is XmSqlErdViewModel erdVm)
+                {
+                    erdVm.OnTablePositionChanged(tableVm);
+                }
                 e.Handled = true;
             }
         }
@@ -492,8 +502,14 @@ namespace DaxStudio.UI.Views
                 var currentPosition = e.GetPosition(_coordinateRoot);
                 var deltaY = currentPosition.Y - _resizeStartPoint.Y;
                 
-                // Update the columns height
+                // Update the columns height (this also updates ExpandedHeight)
                 _resizingTable.ColumnsHeight = _resizeStartHeight + deltaY;
+                
+                // Update relationship lines connected to this table
+                if (DataContext is XmSqlErdViewModel erdVm)
+                {
+                    erdVm.OnTablePositionChanged(_resizingTable);
+                }
                 e.Handled = true;
             }
         }

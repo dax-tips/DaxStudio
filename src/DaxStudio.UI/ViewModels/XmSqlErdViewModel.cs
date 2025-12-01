@@ -148,14 +148,41 @@ namespace DaxStudio.UI.ViewModels
             SearchText = string.Empty;
         }
         
+        private bool _sortKeyColumnsFirst = true;
         /// <summary>
-        /// Collapses all tables to show only headers.
+        /// Whether to sort key/join columns first in the column list.
+        /// </summary>
+        public bool SortKeyColumnsFirst
+        {
+            get => _sortKeyColumnsFirst;
+            set
+            {
+                if (_sortKeyColumnsFirst != value)
+                {
+                    _sortKeyColumnsFirst = value;
+                    NotifyOfPropertyChange();
+                    // Re-sort columns in all tables
+                    foreach (var table in Tables)
+                    {
+                        table.UpdateColumnSort(_sortKeyColumnsFirst);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Collapses all tables to show only headers and key columns.
         /// </summary>
         public void CollapseAll()
         {
             foreach (var table in Tables)
             {
                 table.IsCollapsed = true;
+            }
+            // Update all relationship paths after collapse
+            foreach (var rel in Relationships)
+            {
+                rel.UpdatePath();
             }
         }
         
@@ -167,6 +194,11 @@ namespace DaxStudio.UI.ViewModels
             foreach (var table in Tables)
             {
                 table.IsCollapsed = false;
+            }
+            // Update all relationship paths after expand
+            foreach (var rel in Relationships)
+            {
+                rel.UpdatePath();
             }
         }
         
@@ -640,7 +672,7 @@ namespace DaxStudio.UI.ViewModels
                 .Where(t => !IsIntermediateTable(t.TableName))
                 .OrderByDescending(t => t.HitCount))
             {
-                var tableVm = new ErdTableViewModel(tableInfo);
+                var tableVm = new ErdTableViewModel(tableInfo, _sortKeyColumnsFirst);
                 Tables.Add(tableVm);
             }
         }
@@ -729,6 +761,8 @@ namespace DaxStudio.UI.ViewModels
 
             const double tableWidth = 200;
             const double tableHeight = 180;
+            const double headerHeight = 75; // Fixed header area (title, metrics, etc.)
+            const double columnsHeight = tableHeight - headerHeight; // Height for columns area
             const double horizontalSpacing = 100;
             const double verticalSpacing = 120;
             const double padding = 50;
@@ -736,7 +770,7 @@ namespace DaxStudio.UI.ViewModels
             // Special case: very small diagrams get compact layouts
             if (Tables.Count <= 4 && Relationships.Count <= 3)
             {
-                LayoutCompact(tableWidth, tableHeight, horizontalSpacing, verticalSpacing, padding);
+                LayoutCompact(tableWidth, tableHeight, columnsHeight, horizontalSpacing, verticalSpacing, padding);
                 return;
             }
 
@@ -750,7 +784,7 @@ namespace DaxStudio.UI.ViewModels
             MinimizeCrossings(layers);
             
             // Step 4: Assign X coordinates using barycenter method with median fallback
-            AssignCoordinates(layers, tableWidth, tableHeight, horizontalSpacing, verticalSpacing, padding);
+            AssignCoordinates(layers, tableWidth, tableHeight, columnsHeight, horizontalSpacing, verticalSpacing, padding);
 
             // Step 5: Compact empty spaces between tables
             CompactLayout(layers, tableWidth, horizontalSpacing, padding);
@@ -772,7 +806,7 @@ namespace DaxStudio.UI.ViewModels
         /// Compact layout for small diagrams (1-4 tables).
         /// Optimizes for minimal edge crossings and visual clarity.
         /// </summary>
-        private void LayoutCompact(double tableWidth, double tableHeight, double hSpacing, double vSpacing, double padding)
+        private void LayoutCompact(double tableWidth, double tableHeight, double columnsHeight, double hSpacing, double vSpacing, double padding)
         {
             var neighbors = BuildNeighborMap();
             
@@ -789,7 +823,7 @@ namespace DaxStudio.UI.ViewModels
                 sortedTables[0].X = padding;
                 sortedTables[0].Y = padding;
                 sortedTables[0].Width = tableWidth;
-                sortedTables[0].Height = tableHeight;
+                sortedTables[0].ColumnsHeight = columnsHeight;
             }
             else if (Tables.Count == 2)
             {
@@ -804,12 +838,12 @@ namespace DaxStudio.UI.ViewModels
                     dim.X = padding;
                     dim.Y = padding;
                     dim.Width = tableWidth;
-                    dim.Height = tableHeight;
+                    dim.ColumnsHeight = columnsHeight;
                     
                     fact.X = padding;
                     fact.Y = padding + tableHeight + vSpacing;
                     fact.Width = tableWidth;
-                    fact.Height = tableHeight;
+                    fact.ColumnsHeight = columnsHeight;
                 }
                 else
                 {
@@ -817,12 +851,12 @@ namespace DaxStudio.UI.ViewModels
                     sortedTables[0].X = padding;
                     sortedTables[0].Y = padding;
                     sortedTables[0].Width = tableWidth;
-                    sortedTables[0].Height = tableHeight;
+                    sortedTables[0].ColumnsHeight = columnsHeight;
                     
                     sortedTables[1].X = padding + tableWidth + hSpacing;
                     sortedTables[1].Y = padding;
                     sortedTables[1].Width = tableWidth;
-                    sortedTables[1].Height = tableHeight;
+                    sortedTables[1].ColumnsHeight = columnsHeight;
                 }
             }
             else if (Tables.Count == 3)
@@ -833,18 +867,18 @@ namespace DaxStudio.UI.ViewModels
                 sortedTables[1].X = padding;
                 sortedTables[1].Y = padding;
                 sortedTables[1].Width = tableWidth;
-                sortedTables[1].Height = tableHeight;
+                sortedTables[1].ColumnsHeight = columnsHeight;
                 
                 sortedTables[2].X = padding + tableWidth + hSpacing;
                 sortedTables[2].Y = padding;
                 sortedTables[2].Width = tableWidth;
-                sortedTables[2].Height = tableHeight;
+                sortedTables[2].ColumnsHeight = columnsHeight;
                 
                 // Most connected table centered below
                 sortedTables[0].X = padding + (totalWidth - tableWidth) / 2;
                 sortedTables[0].Y = padding + tableHeight + vSpacing;
                 sortedTables[0].Width = tableWidth;
-                sortedTables[0].Height = tableHeight;
+                sortedTables[0].ColumnsHeight = columnsHeight;
             }
             else // 4 tables
             {
@@ -852,22 +886,22 @@ namespace DaxStudio.UI.ViewModels
                 sortedTables[1].X = padding;
                 sortedTables[1].Y = padding;
                 sortedTables[1].Width = tableWidth;
-                sortedTables[1].Height = tableHeight;
+                sortedTables[1].ColumnsHeight = columnsHeight;
                 
                 sortedTables[2].X = padding + tableWidth + hSpacing;
                 sortedTables[2].Y = padding;
                 sortedTables[2].Width = tableWidth;
-                sortedTables[2].Height = tableHeight;
+                sortedTables[2].ColumnsHeight = columnsHeight;
                 
                 sortedTables[0].X = padding;
                 sortedTables[0].Y = padding + tableHeight + vSpacing;
                 sortedTables[0].Width = tableWidth;
-                sortedTables[0].Height = tableHeight;
+                sortedTables[0].ColumnsHeight = columnsHeight;
                 
                 sortedTables[3].X = padding + tableWidth + hSpacing;
                 sortedTables[3].Y = padding + tableHeight + vSpacing;
                 sortedTables[3].Width = tableWidth;
-                sortedTables[3].Height = tableHeight;
+                sortedTables[3].ColumnsHeight = columnsHeight;
             }
 
             // Calculate canvas size
@@ -1308,7 +1342,7 @@ namespace DaxStudio.UI.ViewModels
         /// Uses barycenter alignment with priority to minimize total edge length.
         /// </summary>
         private void AssignCoordinates(List<List<ErdTableViewModel>> layers,
-            double tableWidth, double tableHeight, double hSpacing, double vSpacing, double padding)
+            double tableWidth, double tableHeight, double columnsHeight, double hSpacing, double vSpacing, double padding)
         {
             var neighbors = BuildNeighborMap();
             
@@ -1324,7 +1358,7 @@ namespace DaxStudio.UI.ViewModels
                     table.X = x;
                     table.Y = y;
                     table.Width = tableWidth;
-                    table.Height = tableHeight;
+                    table.ColumnsHeight = columnsHeight;
                     x += tableWidth + hSpacing;
                 }
             }
@@ -2670,16 +2704,47 @@ namespace DaxStudio.UI.ViewModels
     public class ErdTableViewModel : PropertyChangedBase
     {
         private readonly XmSqlTableInfo _tableInfo;
+        private bool _sortKeyColumnsFirst = true;
 
-        public ErdTableViewModel(XmSqlTableInfo tableInfo)
+        public ErdTableViewModel(XmSqlTableInfo tableInfo, bool sortKeyColumnsFirst = true)
         {
             _tableInfo = tableInfo;
-            Columns = new BindableCollection<ErdColumnViewModel>(
-                tableInfo.Columns.Values
-                    .Where(c => !IsInternalColumn(c.ColumnName))
+            _sortKeyColumnsFirst = sortKeyColumnsFirst;
+            Columns = new BindableCollection<ErdColumnViewModel>(GetSortedColumns());
+        }
+
+        /// <summary>
+        /// Gets columns sorted based on the current sort setting.
+        /// </summary>
+        private IEnumerable<ErdColumnViewModel> GetSortedColumns()
+        {
+            var filtered = _tableInfo.Columns.Values
+                .Where(c => !IsInternalColumn(c.ColumnName));
+
+            if (_sortKeyColumnsFirst)
+            {
+                return filtered
                     .OrderByDescending(c => c.UsageTypes.HasFlag(XmSqlColumnUsage.Join))
-                    .ThenByDescending(c => c.HitCount)
-                    .Select(c => new ErdColumnViewModel(c)));
+                    .ThenBy(c => c.ColumnName, StringComparer.OrdinalIgnoreCase)
+                    .Select(c => new ErdColumnViewModel(c));
+            }
+            else
+            {
+                return filtered
+                    .OrderBy(c => c.ColumnName, StringComparer.OrdinalIgnoreCase)
+                    .Select(c => new ErdColumnViewModel(c));
+            }
+        }
+
+        /// <summary>
+        /// Updates the column sort order.
+        /// </summary>
+        public void UpdateColumnSort(bool sortKeyColumnsFirst)
+        {
+            _sortKeyColumnsFirst = sortKeyColumnsFirst;
+            Columns.Clear();
+            Columns.AddRange(GetSortedColumns());
+            NotifyOfPropertyChange(nameof(KeyColumns));
         }
 
         /// <summary>
@@ -2954,9 +3019,18 @@ namespace DaxStudio.UI.ViewModels
             get => _isCollapsed;
             set
             {
-                _isCollapsed = value;
-                NotifyOfPropertyChange();
-                NotifyOfPropertyChange(nameof(IsExpanded));
+                if (_isCollapsed != value)
+                {
+                    _isCollapsed = value;
+                    NotifyOfPropertyChange();
+                    NotifyOfPropertyChange(nameof(IsExpanded));
+                    // Update Height when collapse state changes
+                    NotifyOfPropertyChange(nameof(Height));
+                    NotifyOfPropertyChange(nameof(CenterY));
+                    NotifyOfPropertyChange(nameof(RightEdgeY));
+                    NotifyOfPropertyChange(nameof(LeftEdgeY));
+                    NotifyOfPropertyChange(nameof(BottomEdgeY));
+                }
             }
         }
         
@@ -3001,6 +3075,32 @@ namespace DaxStudio.UI.ViewModels
 
         public BindableCollection<ErdColumnViewModel> Columns { get; }
 
+        /// <summary>
+        /// Key/join columns (shown when table is collapsed).
+        /// </summary>
+        public IEnumerable<ErdColumnViewModel> KeyColumns => Columns.Where(c => c.IsJoinColumn);
+
+        /// <summary>
+        /// Whether this table has any key/join columns.
+        /// </summary>
+        public bool HasKeyColumns => Columns.Any(c => c.IsJoinColumn);
+
+        private const double HeaderHeight = 60; // Approximate header height with stats row
+        private const double KeyColumnRowHeight = 18; // Height per key column row
+
+        /// <summary>
+        /// Calculates the collapsed height based on header + key columns.
+        /// </summary>
+        public double CollapsedHeight
+        {
+            get
+            {
+                int keyCount = Columns.Count(c => c.IsJoinColumn);
+                if (keyCount == 0) return HeaderHeight;
+                return HeaderHeight + 6 + (keyCount * KeyColumnRowHeight); // 6 = padding
+            }
+        }
+
         #region Search Highlighting
         
         private bool _isSearchMatch = true;
@@ -3039,20 +3139,69 @@ namespace DaxStudio.UI.ViewModels
                 _heatLevel = value; 
                 NotifyOfPropertyChange(); 
                 NotifyOfPropertyChange(nameof(HeatColor));
+                NotifyOfPropertyChange(nameof(HeatLevelText));
+                NotifyOfPropertyChange(nameof(HeatLevelPercent));
+                NotifyOfPropertyChange(nameof(HeatPatternOpacity));
+                NotifyOfPropertyChange(nameof(HeatAccessibilityIcon));
             }
         }
 
         /// <summary>
+        /// Gets a text label for the heat level (for accessibility).
+        /// </summary>
+        public string HeatLevelText
+        {
+            get
+            {
+                if (_heatLevel >= 0.8) return "Hot";
+                if (_heatLevel >= 0.6) return "Warm";
+                if (_heatLevel >= 0.4) return "Med";
+                if (_heatLevel >= 0.2) return "Cool";
+                return "Low";
+            }
+        }
+
+        /// <summary>
+        /// Gets the heat level as a percentage string (for accessibility).
+        /// </summary>
+        public string HeatLevelPercent => $"{(_heatLevel * 100):0}%";
+
+        /// <summary>
+        /// Gets an accessibility icon based on heat level.
+        /// Uses different shapes: ○ (low) → ◐ (medium) → ● (high)
+        /// </summary>
+        public string HeatAccessibilityIcon
+        {
+            get
+            {
+                if (_heatLevel >= 0.8) return "●●●"; // Hot - 3 filled
+                if (_heatLevel >= 0.6) return "●●○"; // Warm - 2 filled
+                if (_heatLevel >= 0.4) return "●○○"; // Medium - 1 filled
+                if (_heatLevel >= 0.2) return "◐○○"; // Cool - half filled
+                return "○○○"; // Low - empty
+            }
+        }
+
+        /// <summary>
+        /// Gets pattern opacity for visual differentiation (for accessibility).
+        /// Higher heat = more visible diagonal stripes pattern.
+        /// </summary>
+        public double HeatPatternOpacity => _heatLevel * 0.3; // Max 30% opacity for stripes
+
+        /// <summary>
         /// Gets the heat color brush based on heat level.
-        /// Green (cool) to Red (hot) gradient.
+        /// Uses blue (cool) to orange (hot) gradient for better accessibility.
+        /// This color scheme is more distinguishable for color-blind users.
         /// </summary>
         public System.Windows.Media.SolidColorBrush HeatColor
         {
             get
             {
-                // Convert heat level to hue: 120 (green) to 0 (red)
-                double hue = (1 - _heatLevel) * 120;
-                var color = HslToRgb(hue, 0.7, 0.5);
+                // Use blue (cool) to orange (hot) - more accessible than green-to-red
+                // Blue: H=210, Orange: H=30
+                // Interpolate: low heat = blue (210°), high heat = orange (30°)
+                double hue = 210 - (_heatLevel * 180); // 210 -> 30
+                var color = HslToRgb(hue, 0.65, 0.5);
                 return new System.Windows.Media.SolidColorBrush(color);
             }
         }
@@ -3215,14 +3364,21 @@ namespace DaxStudio.UI.ViewModels
             set { _width = value; NotifyOfPropertyChange(); NotifyOfPropertyChange(nameof(CenterX)); }
         }
 
-        private double _height = 150;
+        /// <summary>
+        /// Current height of the table - calculated based on content for relationship line positioning.
+        /// Header area includes: title bar (~30), metrics rows (~35), padding (~10) = ~75px
+        /// </summary>
         public double Height
         {
-            get => _height;
-            set { _height = value; NotifyOfPropertyChange(); NotifyOfPropertyChange(nameof(CenterY)); }
+            get
+            {
+                if (IsCollapsed) return CollapsedHeight;
+                // Approximate height: header area (~75) + columns area
+                return 75 + _columnsHeight;
+            }
         }
 
-        private double _columnsHeight = 120;
+        private double _columnsHeight = 105; // Default matches tableHeight (180) - headerHeight (75)
         /// <summary>
         /// Height of the columns area (resizable by user).
         /// </summary>
@@ -3232,8 +3388,18 @@ namespace DaxStudio.UI.ViewModels
             set 
             { 
                 // Clamp between min and max
-                _columnsHeight = Math.Max(40, Math.Min(400, value)); 
-                NotifyOfPropertyChange(); 
+                var newValue = Math.Max(40, Math.Min(400, value));
+                if (_columnsHeight != newValue)
+                {
+                    _columnsHeight = newValue;
+                    NotifyOfPropertyChange();
+                    // Notify height-related properties for relationship line calculations
+                    NotifyOfPropertyChange(nameof(Height));
+                    NotifyOfPropertyChange(nameof(CenterY));
+                    NotifyOfPropertyChange(nameof(RightEdgeY));
+                    NotifyOfPropertyChange(nameof(LeftEdgeY));
+                    NotifyOfPropertyChange(nameof(BottomEdgeY));
+                }
             }
         }
 
