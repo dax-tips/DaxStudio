@@ -32,12 +32,14 @@ namespace DaxStudio.UI.Views
                 if (e.OldValue is ModelDiagramViewModel oldVm)
                 {
                     oldVm.ExportRequested -= OnExportRequested;
+                    oldVm.CopyImageRequested -= OnCopyImageRequested;
                     oldVm.OnScaleChanged -= OnScaleChanged;
                     oldVm.OnScrollToRequested -= OnScrollToRequested;
                 }
                 if (e.NewValue is ModelDiagramViewModel newVm)
                 {
                     newVm.ExportRequested += OnExportRequested;
+                    newVm.CopyImageRequested += OnCopyImageRequested;
                     newVm.OnScaleChanged += OnScaleChanged;
                     newVm.OnScrollToRequested += OnScrollToRequested;
                     // Set initial view dimensions
@@ -179,6 +181,50 @@ namespace DaxStudio.UI.Views
             catch (System.Exception ex)
             {
                 MessageBox.Show($"Failed to export image: {ex.Message}", "Export Error",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        /// <summary>
+        /// Handles copy image to clipboard request from ViewModel.
+        /// </summary>
+        private void OnCopyImageRequested(object sender, System.EventArgs e)
+        {
+            try
+            {
+                var canvas = DiagramCanvas;
+                if (canvas == null) return;
+
+                var bounds = VisualTreeHelper.GetDescendantBounds(canvas);
+                if (bounds.IsEmpty)
+                {
+                    bounds = new Rect(0, 0, canvas.ActualWidth, canvas.ActualHeight);
+                }
+
+                var dpi = 96d;
+                var renderWidth = (int)System.Math.Max(bounds.Width + 40, canvas.ActualWidth);
+                var renderHeight = (int)System.Math.Max(bounds.Height + 40, canvas.ActualHeight);
+
+                var renderTarget = new RenderTargetBitmap(
+                    renderWidth, renderHeight,
+                    dpi, dpi,
+                    PixelFormats.Pbgra32);
+
+                var drawingVisual = new DrawingVisual();
+                using (var dc = drawingVisual.RenderOpen())
+                {
+                    dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, renderWidth, renderHeight));
+                    var visualBrush = new VisualBrush(canvas);
+                    dc.DrawRectangle(visualBrush, null, new Rect(0, 0, canvas.ActualWidth, canvas.ActualHeight));
+                }
+
+                renderTarget.Render(drawingVisual);
+
+                Clipboard.SetImage(renderTarget);
+            }
+            catch (System.Exception ex)
+            {
+                MessageBox.Show($"Failed to copy image to clipboard: {ex.Message}", "Copy Error",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
