@@ -783,6 +783,42 @@
                                 ToolTip="Show all queries"/>
                     </StackPanel>
                 </Border>
+                
+                <!-- Heat Map Mode Selector -->
+                <Border DockPanel.Dock="Left"
+                        Margin="10,6,10,6"
+                        BorderBrush="{DynamicResource Theme.Brush.Table.Border}"
+                        BorderThickness="1"
+                        CornerRadius="3"
+                        Background="{DynamicResource Theme.Brush.Content.Back}"
+                        ToolTip="Select what the table header colors represent">
+                    <StackPanel Orientation="Horizontal" Margin="4,2">
+                        <TextBlock Text="Heat Map:" 
+                                   Margin="4,0,6,0" 
+                                   VerticalAlignment="Center" 
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
+                        <RadioButton Content="Hit Count" 
+                                     IsChecked="{Binding IsHeatMapModeHitCount}"
+                                     Margin="4,0"
+                                     VerticalAlignment="Center"
+                                     cal:Message.Attach="[Event Checked] = [Action SetHeatMapModeHitCount]"
+                                     ToolTip="Color tables by number of times they appear in SE queries"/>
+                        <RadioButton Content="CPU Time" 
+                                     IsChecked="{Binding IsHeatMapModeCpuTime}"
+                                     Margin="4,0"
+                                     VerticalAlignment="Center"
+                                     cal:Message.Attach="[Event Checked] = [Action SetHeatMapModeCpuTime]"
+                                     ToolTip="Color tables by total CPU time spent in SE queries"/>
+                        <TextBlock Text="(green=low, red=high)" 
+                                   Margin="8,0,4,0" 
+                                   VerticalAlignment="Center" 
+                                   FontStyle="Italic"
+                                   FontSize="10"
+                                   Opacity="0.7"
+                                   Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
+                    </StackPanel>
+                </Border>
             </DockPanel>
         </ctrl:ClipBorder>
         

@@ -15,6 +15,22 @@ using System.Windows.Media;
 namespace DaxStudio.UI.ViewModels
 {
     /// <summary>
+    /// Defines what metric is used for the table header heat map coloring.
+    /// </summary>
+    public enum HeatMapMode
+    {
+        /// <summary>
+        /// Color based on how many times the table appears in SE queries (Hit Count).
+        /// </summary>
+        HitCount,
+        
+        /// <summary>
+        /// Color based on CPU time consumed by queries on this table.
+        /// </summary>
+        CpuTime
+    }
+
+    /// <summary>
     /// ViewModel for the xmSQL ERD (Entity Relationship Diagram) visualization.
     /// This displays tables, columns, and relationships extracted from Server Timing events.
     /// This is a dockable tool window that can be resized, floated, or maximized.
@@ -243,6 +259,80 @@ namespace DaxStudio.UI.ViewModels
                 UpdateBottleneckHighlighting();
             }
         }
+
+        #region Heat Map Mode
+
+        private HeatMapMode _heatMapMode = HeatMapMode.HitCount;
+        /// <summary>
+        /// The metric used for table header heat map coloring.
+        /// </summary>
+        public HeatMapMode HeatMapMode
+        {
+            get => _heatMapMode;
+            set
+            {
+                if (_heatMapMode != value)
+                {
+                    _heatMapMode = value;
+                    NotifyOfPropertyChange();
+                    NotifyOfPropertyChange(nameof(IsHeatMapModeHitCount));
+                    NotifyOfPropertyChange(nameof(IsHeatMapModeCpuTime));
+                    NotifyOfPropertyChange(nameof(HeatMapModeDescription));
+                    NotifyOfPropertyChange(nameof(HeatMapLegendText));
+                    CalculateHeatLevels();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Whether heat map mode is set to Hit Count.
+        /// </summary>
+        public bool IsHeatMapModeHitCount
+        {
+            get => _heatMapMode == HeatMapMode.HitCount;
+            set { if (value) HeatMapMode = HeatMapMode.HitCount; }
+        }
+
+        /// <summary>
+        /// Whether heat map mode is set to CPU Time.
+        /// </summary>
+        public bool IsHeatMapModeCpuTime
+        {
+            get => _heatMapMode == HeatMapMode.CpuTime;
+            set { if (value) HeatMapMode = HeatMapMode.CpuTime; }
+        }
+
+        /// <summary>
+        /// Description of the current heat map mode for tooltips.
+        /// </summary>
+        public string HeatMapModeDescription => _heatMapMode switch
+        {
+            HeatMapMode.HitCount => "Table colors show how frequently each table appears in SE queries (Hit Count)",
+            HeatMapMode.CpuTime => "Table colors show CPU time consumed by queries on each table",
+            _ => "Table colors indicate relative activity"
+        };
+
+        /// <summary>
+        /// Legend text explaining the current heat map coloring.
+        /// </summary>
+        public string HeatMapLegendText => _heatMapMode switch
+        {
+            HeatMapMode.HitCount => "Color: SE Query Hits",
+            HeatMapMode.CpuTime => "Color: CPU Time",
+            _ => "Color: Activity"
+        };
+
+        /// <summary>
+        /// Sets heat map mode to Hit Count.
+        /// </summary>
+        public void SetHeatMapModeHitCount() => HeatMapMode = HeatMapMode.HitCount;
+
+        /// <summary>
+        /// Sets heat map mode to CPU Time.
+        /// </summary>
+        public void SetHeatMapModeCpuTime() => HeatMapMode = HeatMapMode.CpuTime;
+
+        #endregion
 
         #region Query Plan Integration
 
@@ -2396,27 +2486,52 @@ namespace DaxStudio.UI.ViewModels
         #region Heat Map
 
         /// <summary>
-        /// Calculates heat levels for all tables based on their hit counts.
+        /// Calculates heat levels for all tables based on the selected heat map mode.
         /// </summary>
         private void CalculateHeatLevels()
         {
             if (Tables.Count == 0) return;
 
-            int maxHitCount = Tables.Max(t => t.HitCount);
-            int minHitCount = Tables.Min(t => t.HitCount);
-            int range = maxHitCount - minHitCount;
-
-            foreach (var table in Tables)
+            if (_heatMapMode == HeatMapMode.CpuTime)
             {
-                if (range > 0)
+                // Calculate heat based on CPU time
+                long maxCpu = Tables.Max(t => t.TotalCpuTimeMs);
+                long minCpu = Tables.Min(t => t.TotalCpuTimeMs);
+                long range = maxCpu - minCpu;
+
+                foreach (var table in Tables)
                 {
-                    // Normalize to 0.0 - 1.0
-                    table.HeatLevel = (double)(table.HitCount - minHitCount) / range;
+                    if (range > 0)
+                    {
+                        // Normalize to 0.0 - 1.0
+                        table.HeatLevel = (double)(table.TotalCpuTimeMs - minCpu) / range;
+                    }
+                    else
+                    {
+                        // All tables have same CPU time
+                        table.HeatLevel = 0.5;
+                    }
                 }
-                else
+            }
+            else
+            {
+                // Calculate heat based on hit count (default)
+                int maxHitCount = Tables.Max(t => t.HitCount);
+                int minHitCount = Tables.Min(t => t.HitCount);
+                int range = maxHitCount - minHitCount;
+
+                foreach (var table in Tables)
                 {
-                    // All tables have same hit count
-                    table.HeatLevel = 0.5;
+                    if (range > 0)
+                    {
+                        // Normalize to 0.0 - 1.0
+                        table.HeatLevel = (double)(table.HitCount - minHitCount) / range;
+                    }
+                    else
+                    {
+                        // All tables have same hit count
+                        table.HeatLevel = 0.5;
+                    }
                 }
             }
         }
