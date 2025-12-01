@@ -1597,6 +1597,20 @@ namespace DaxStudio.UI.ViewModels
             }
         }
 
+        /// <summary>
+        /// Event raised when copy image to clipboard is requested.
+        /// The view handles the actual rendering.
+        /// </summary>
+        public event EventHandler CopyImageRequested;
+        
+        /// <summary>
+        /// Copies the diagram as an image to the clipboard.
+        /// </summary>
+        public void CopyImageToClipboard()
+        {
+            CopyImageRequested?.Invoke(this, EventArgs.Empty);
+        }
+
         #endregion
 
         #region Zoom

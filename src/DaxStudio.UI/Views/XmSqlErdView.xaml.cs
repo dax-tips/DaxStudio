@@ -37,11 +37,13 @@ namespace DaxStudio.UI.Views
                 if (e.OldValue is XmSqlErdViewModel oldVm)
                 {
                     oldVm.ExportRequested -= OnExportRequested;
+                    oldVm.CopyImageRequested -= OnCopyImageRequested;
                     oldVm.OnScaleChanged -= OnScaleChanged;
                 }
                 if (e.NewValue is XmSqlErdViewModel newVm)
                 {
                     newVm.ExportRequested += OnExportRequested;
+                    newVm.CopyImageRequested += OnCopyImageRequested;
                     newVm.OnScaleChanged += OnScaleChanged;
                     // Set initial view dimensions
                     UpdateViewDimensions(newVm);
@@ -166,6 +168,57 @@ namespace DaxStudio.UI.Views
             catch (System.Exception ex)
             {
                 System.Windows.MessageBox.Show($"Failed to export image: {ex.Message}", "Export Error", 
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        /// <summary>
+        /// Handles copy image to clipboard request from ViewModel.
+        /// </summary>
+        private void OnCopyImageRequested(object sender, EventArgs e)
+        {
+            try
+            {
+                var canvas = DiagramCanvas;
+                if (canvas == null) return;
+
+                // Get the actual size of the content
+                var bounds = VisualTreeHelper.GetDescendantBounds(canvas);
+                if (bounds.IsEmpty) 
+                {
+                    bounds = new Rect(0, 0, canvas.ActualWidth, canvas.ActualHeight);
+                }
+
+                // Create a render target with proper DPI
+                var dpi = 96d;
+                var renderWidth = (int)System.Math.Max(bounds.Width + 40, canvas.ActualWidth);
+                var renderHeight = (int)System.Math.Max(bounds.Height + 40, canvas.ActualHeight);
+                
+                var renderTarget = new RenderTargetBitmap(
+                    renderWidth, renderHeight,
+                    dpi, dpi,
+                    PixelFormats.Pbgra32);
+
+                // Create a visual brush to render from the canvas with background
+                var drawingVisual = new DrawingVisual();
+                using (var dc = drawingVisual.RenderOpen())
+                {
+                    // Draw white background
+                    dc.DrawRectangle(System.Windows.Media.Brushes.White, null, new Rect(0, 0, renderWidth, renderHeight));
+                    
+                    // Draw the canvas content
+                    var visualBrush = new VisualBrush(canvas);
+                    dc.DrawRectangle(visualBrush, null, new Rect(0, 0, canvas.ActualWidth, canvas.ActualHeight));
+                }
+                
+                renderTarget.Render(drawingVisual);
+
+                // Copy to clipboard
+                Clipboard.SetImage(renderTarget);
+            }
+            catch (System.Exception ex)
+            {
+                System.Windows.MessageBox.Show($"Failed to copy image to clipboard: {ex.Message}", "Copy Error", 
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
