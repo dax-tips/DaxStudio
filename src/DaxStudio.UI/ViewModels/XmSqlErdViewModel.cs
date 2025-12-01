@@ -609,6 +609,7 @@ namespace DaxStudio.UI.ViewModels
         /// Lays out the tables on the canvas using Sugiyama-style layered graph drawing algorithm.
         /// Tables connected by relationships are placed in hierarchical layers.
         /// Dimension tables (on the "one" side) go at the top, fact tables (on the "many" side) at the bottom.
+        /// Enhanced with SE-specific optimizations for hit counts and CPU usage.
         /// </summary>
         private void LayoutDiagram()
         {
@@ -620,14 +621,27 @@ namespace DaxStudio.UI.ViewModels
             const double verticalSpacing = 120;
             const double padding = 50;
 
+            // Special case: very small diagrams get compact layouts
+            if (Tables.Count <= 4 && Relationships.Count <= 3)
+            {
+                LayoutCompact(tableWidth, tableHeight, horizontalSpacing, verticalSpacing, padding);
+                return;
+            }
+
             // Step 1: Assign tables to layers based on longest path from root nodes
             var layers = AssignLayers();
             
-            // Step 2: Order tables within each layer to minimize edge crossings
+            // Step 2: Handle disconnected tables - integrate them into existing layers
+            IntegrateDisconnectedTables(layers);
+            
+            // Step 3: Order tables within each layer to minimize edge crossings
             MinimizeCrossings(layers);
             
-            // Step 3: Assign X coordinates using barycenter method
+            // Step 4: Assign X coordinates using barycenter method with median fallback
             AssignCoordinates(layers, tableWidth, tableHeight, horizontalSpacing, verticalSpacing, padding);
+
+            // Step 5: Compact empty spaces between tables
+            CompactLayout(layers, tableWidth, horizontalSpacing, padding);
 
             // Calculate canvas size to fit all tables
             var maxX = Tables.Any() ? Tables.Max(t => t.X + t.Width) : 100;
@@ -639,6 +653,165 @@ namespace DaxStudio.UI.ViewModels
             foreach (var rel in Relationships)
             {
                 rel.UpdatePath();
+            }
+        }
+
+        /// <summary>
+        /// Compact layout for small diagrams (1-4 tables).
+        /// Optimizes for minimal edge crossings and visual clarity.
+        /// </summary>
+        private void LayoutCompact(double tableWidth, double tableHeight, double hSpacing, double vSpacing, double padding)
+        {
+            var neighbors = BuildNeighborMap();
+            
+            // Sort tables by connectivity and importance (hit count)
+            var sortedTables = Tables
+                .OrderByDescending(t => neighbors.TryGetValue(t.TableName, out var n) ? n.Count : 0)
+                .ThenByDescending(t => t.HitCount)
+                .ThenByDescending(t => t.CpuPercentage)
+                .ToList();
+
+            if (Tables.Count == 1)
+            {
+                // Single table - center it
+                sortedTables[0].X = padding;
+                sortedTables[0].Y = padding;
+                sortedTables[0].Width = tableWidth;
+                sortedTables[0].Height = tableHeight;
+            }
+            else if (Tables.Count == 2)
+            {
+                // Two tables - check if connected, layout accordingly
+                bool connected = Relationships.Any();
+                if (connected)
+                {
+                    // Vertical layout for connected tables (dimension on top)
+                    var dim = sortedTables[0];
+                    var fact = sortedTables[1];
+                    
+                    dim.X = padding;
+                    dim.Y = padding;
+                    dim.Width = tableWidth;
+                    dim.Height = tableHeight;
+                    
+                    fact.X = padding;
+                    fact.Y = padding + tableHeight + vSpacing;
+                    fact.Width = tableWidth;
+                    fact.Height = tableHeight;
+                }
+                else
+                {
+                    // Horizontal layout for unconnected tables
+                    sortedTables[0].X = padding;
+                    sortedTables[0].Y = padding;
+                    sortedTables[0].Width = tableWidth;
+                    sortedTables[0].Height = tableHeight;
+                    
+                    sortedTables[1].X = padding + tableWidth + hSpacing;
+                    sortedTables[1].Y = padding;
+                    sortedTables[1].Width = tableWidth;
+                    sortedTables[1].Height = tableHeight;
+                }
+            }
+            else if (Tables.Count == 3)
+            {
+                // Three tables - inverted triangle (2 on top, 1 centered below)
+                double totalWidth = 2 * tableWidth + hSpacing;
+                
+                sortedTables[1].X = padding;
+                sortedTables[1].Y = padding;
+                sortedTables[1].Width = tableWidth;
+                sortedTables[1].Height = tableHeight;
+                
+                sortedTables[2].X = padding + tableWidth + hSpacing;
+                sortedTables[2].Y = padding;
+                sortedTables[2].Width = tableWidth;
+                sortedTables[2].Height = tableHeight;
+                
+                // Most connected table centered below
+                sortedTables[0].X = padding + (totalWidth - tableWidth) / 2;
+                sortedTables[0].Y = padding + tableHeight + vSpacing;
+                sortedTables[0].Width = tableWidth;
+                sortedTables[0].Height = tableHeight;
+            }
+            else // 4 tables
+            {
+                // 2x2 grid, most connected in bottom-left
+                sortedTables[1].X = padding;
+                sortedTables[1].Y = padding;
+                sortedTables[1].Width = tableWidth;
+                sortedTables[1].Height = tableHeight;
+                
+                sortedTables[2].X = padding + tableWidth + hSpacing;
+                sortedTables[2].Y = padding;
+                sortedTables[2].Width = tableWidth;
+                sortedTables[2].Height = tableHeight;
+                
+                sortedTables[0].X = padding;
+                sortedTables[0].Y = padding + tableHeight + vSpacing;
+                sortedTables[0].Width = tableWidth;
+                sortedTables[0].Height = tableHeight;
+                
+                sortedTables[3].X = padding + tableWidth + hSpacing;
+                sortedTables[3].Y = padding + tableHeight + vSpacing;
+                sortedTables[3].Width = tableWidth;
+                sortedTables[3].Height = tableHeight;
+            }
+
+            // Calculate canvas size
+            var maxX = Tables.Any() ? Tables.Max(t => t.X + t.Width) : 100;
+            var maxY = Tables.Any() ? Tables.Max(t => t.Y + t.Height) : 100;
+            CanvasWidth = Math.Max(100, maxX + padding);
+            CanvasHeight = Math.Max(100, maxY + padding);
+
+            // Update relationship paths
+            foreach (var rel in Relationships)
+            {
+                rel.UpdatePath();
+            }
+        }
+
+        /// <summary>
+        /// Integrates disconnected tables into existing layers based on their importance.
+        /// Tables with higher hit counts are placed in more prominent positions.
+        /// </summary>
+        private void IntegrateDisconnectedTables(List<List<ErdTableViewModel>> layers)
+        {
+            if (!layers.Any()) return;
+            
+            // Find all tables that are in layers
+            var assignedTables = new HashSet<string>(
+                layers.SelectMany(l => l.Select(t => t.TableName)), 
+                StringComparer.OrdinalIgnoreCase);
+            
+            // Find disconnected tables
+            var disconnected = Tables
+                .Where(t => !assignedTables.Contains(t.TableName))
+                .OrderByDescending(t => t.HitCount)
+                .ThenByDescending(t => t.CpuPercentage)
+                .ToList();
+            
+            if (!disconnected.Any()) return;
+            
+            // Find the layer with fewest tables (to balance the layout)
+            var targetLayerIndex = 0;
+            var minCount = int.MaxValue;
+            for (int i = 0; i < layers.Count; i++)
+            {
+                if (layers[i].Count < minCount)
+                {
+                    minCount = layers[i].Count;
+                    targetLayerIndex = i;
+                }
+            }
+            
+            // Distribute disconnected tables across layers, starting with the least populated
+            int layerIndex = targetLayerIndex;
+            foreach (var table in disconnected)
+            {
+                layers[layerIndex].Add(table);
+                // Round-robin to balance layers
+                layerIndex = (layerIndex + 1) % layers.Count;
             }
         }
 
@@ -929,54 +1102,67 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
-        /// Orders a layer based on the average position of neighbors in the reference layer (barycenter).
+        /// Orders a layer based on the median position of neighbors in the reference layer.
+        /// Uses median instead of mean (barycenter) for more stable results with varying connectivity.
+        /// Falls back to hit count for tables with no connections for consistent ordering.
         /// </summary>
         private void OrderLayerByBarycenter(List<ErdTableViewModel> layer, 
             List<ErdTableViewModel> referenceLayer, 
             Dictionary<string, HashSet<string>> neighbors)
         {
-            // Calculate barycenter for each table in the layer
-            var barycenters = new Dictionary<ErdTableViewModel, double>();
+            // Calculate median position of neighbors for each table
+            var medianPositions = new Dictionary<ErdTableViewModel, double>();
+            var neighborPositions = new Dictionary<ErdTableViewModel, List<int>>();
             
-            for (int i = 0; i < referenceLayer.Count; i++)
+            // Collect neighbor positions for each table
+            foreach (var table in layer)
             {
-                // Position index of reference table
-                var refTable = referenceLayer[i];
-                if (!neighbors.ContainsKey(refTable.TableName)) continue;
+                neighborPositions[table] = new List<int>();
                 
-                foreach (var neighborName in neighbors[refTable.TableName])
+                if (neighbors.TryGetValue(table.TableName, out var tableNeighbors))
                 {
-                    var neighborTable = layer.FirstOrDefault(t => t.TableName.Equals(neighborName, StringComparison.OrdinalIgnoreCase));
-                    if (neighborTable != null)
+                    for (int i = 0; i < referenceLayer.Count; i++)
                     {
-                        if (!barycenters.ContainsKey(neighborTable))
-                            barycenters[neighborTable] = 0;
-                        barycenters[neighborTable] += i;
+                        if (tableNeighbors.Contains(referenceLayer[i].TableName))
+                        {
+                            neighborPositions[table].Add(i);
+                        }
                     }
                 }
             }
             
-            // Normalize by number of neighbors
+            // Calculate median for each table
             foreach (var table in layer)
             {
-                if (barycenters.ContainsKey(table) && neighbors.ContainsKey(table.TableName))
+                var positions = neighborPositions[table];
+                if (positions.Count == 0)
                 {
-                    int neighborCount = neighbors[table.TableName].Count(n => 
-                        referenceLayer.Any(r => r.TableName.Equals(n, StringComparison.OrdinalIgnoreCase)));
-                    if (neighborCount > 0)
-                        barycenters[table] /= neighborCount;
+                    // No neighbors - use a value that preserves relative ordering
+                    // Place disconnected high-hit tables more centrally
+                    medianPositions[table] = referenceLayer.Count / 2.0 + 
+                        (1.0 - (table.HitCount / (double)Math.Max(1, Tables.Max(t => t.HitCount)))) * 0.1;
+                }
+                else if (positions.Count == 1)
+                {
+                    medianPositions[table] = positions[0];
                 }
                 else
                 {
-                    // Tables with no neighbors get a high barycenter (placed at end)
-                    barycenters[table] = double.MaxValue / 2;
+                    positions.Sort();
+                    int mid = positions.Count / 2;
+                    medianPositions[table] = positions.Count % 2 == 0
+                        ? (positions[mid - 1] + positions[mid]) / 2.0
+                        : positions[mid];
                 }
             }
             
-            // Sort layer by barycenter
-            var sorted = layer.OrderBy(t => barycenters.TryGetValue(t, out var bc) ? bc : double.MaxValue / 2)
-                              .ThenBy(t => t.TableName)
-                              .ToList();
+            // Sort layer by median position, then by hit count (descending) for ties, then by name
+            var sorted = layer
+                .OrderBy(t => medianPositions.TryGetValue(t, out var m) ? m : double.MaxValue / 2)
+                .ThenByDescending(t => t.HitCount)
+                .ThenByDescending(t => t.CpuPercentage)
+                .ThenBy(t => t.TableName)
+                .ToList();
             
             layer.Clear();
             layer.AddRange(sorted);
@@ -1142,6 +1328,69 @@ namespace DaxStudio.UI.ViewModels
                 foreach (var table in layer)
                 {
                     table.X += offset;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Compacts the layout by removing unnecessary gaps between tables.
+        /// Tables are pulled left while maintaining minimum spacing and alignment.
+        /// </summary>
+        private void CompactLayout(List<List<ErdTableViewModel>> layers, double tableWidth, double hSpacing, double padding)
+        {
+            var neighbors = BuildNeighborMap();
+            
+            foreach (var layer in layers)
+            {
+                if (layer.Count <= 1) continue;
+                
+                // Sort by current X position
+                var sortedLayer = layer.OrderBy(t => t.X).ToList();
+                
+                // Pull each table as far left as possible while respecting:
+                // 1. Minimum spacing from previous table
+                // 2. Alignment with connected tables in other layers
+                for (int i = 1; i < sortedLayer.Count; i++)
+                {
+                    var table = sortedLayer[i];
+                    var prevTable = sortedLayer[i - 1];
+                    
+                    double minX = prevTable.X + tableWidth + hSpacing;
+                    
+                    // Check if we have a connected table we should align with
+                    if (neighbors.TryGetValue(table.TableName, out var tableNeighbors))
+                    {
+                        var connectedTables = Tables
+                            .Where(t => tableNeighbors.Contains(t.TableName) && !layer.Contains(t))
+                            .ToList();
+                        
+                        if (connectedTables.Any())
+                        {
+                            // Get average X of connected tables
+                            double avgConnectedX = connectedTables.Average(t => t.X + tableWidth / 2) - tableWidth / 2;
+                            
+                            // Only move if it reduces the gap and doesn't violate minimum spacing
+                            if (avgConnectedX >= minX && avgConnectedX < table.X)
+                            {
+                                table.X = avgConnectedX;
+                            }
+                            else if (table.X > minX + hSpacing)
+                            {
+                                // Close unnecessary gaps
+                                table.X = Math.Max(minX, Math.Min(table.X, avgConnectedX));
+                            }
+                        }
+                        else if (table.X > minX + hSpacing)
+                        {
+                            // No connected tables - just compact
+                            table.X = minX;
+                        }
+                    }
+                    else if (table.X > minX + hSpacing)
+                    {
+                        // No neighbors - compact to minimum
+                        table.X = minX;
+                    }
                 }
             }
         }
