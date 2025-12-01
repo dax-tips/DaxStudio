@@ -16,6 +16,7 @@
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="pack://application:,,,/DaxStudio.UI;Component/Resources/DaxStudioResources.xaml" />
                 <ResourceDictionary Source="pack://application:,,,/DaxStudio.UI;Component/Resources/Styles/BusyPanel.xaml" />
+                <ResourceDictionary Source="pack://application:,,,/DaxStudio.UI;Component/Resources/Styles/TraceWatcherStyles.xaml" />
             </ResourceDictionary.MergedDictionaries>
 
             <conv:BoolToHiddenConverter x:Key="BoolToVisibilityConverter" />
@@ -645,17 +646,56 @@
                          Background="{DynamicResource Theme.Brush.MenuBar.Back}"
                          Margin="0,0,0,8">
             <DockPanel LastChildFill="False">
-                <TextBlock DockPanel.Dock="Left"
-                           Text="Query Dependencies Diagram"
-                           FontWeight="SemiBold"
-                           FontSize="14"
-                           Foreground="{DynamicResource Theme.Brush.Default.Fore}"
-                           VerticalAlignment="Center"
-                           Margin="10,8"/>
+                
+                <!-- Left side buttons -->
+                <Button DockPanel.Dock="Left" Style="{StaticResource TraceButton}"
+                        cal:Message.Attach="[Event Click] = [Action ClearSelection]"
+                        ToolTip="Clear table selection and highlighting">
+                    <StackPanel Orientation="Horizontal">
+                        <Image Source="{DynamicResource clear_toolbarDrawingImage}" Margin="0,0,4,0"/>
+                        <TextBlock>Clear</TextBlock>
+                    </StackPanel>
+                </Button>
+                
+                <Button DockPanel.Dock="Left" Style="{StaticResource TraceButton}"
+                        cal:Message.Attach="[Event Click] = [Action CopyToClipboard]"
+                        ToolTip="Copy diagram summary to clipboard">
+                    <StackPanel Orientation="Horizontal">
+                        <Image Source="{DynamicResource copy_toolbarDrawingImage}" Margin="0,0,4,0"/>
+                        <TextBlock>Copy</TextBlock>
+                    </StackPanel>
+                </Button>
+                
+                <Button DockPanel.Dock="Left" Style="{StaticResource TraceButton}"
+                        cal:Message.Attach="[Event Click] = [Action ExportToImage]"
+                        ToolTip="Export diagram as PNG image">
+                    <StackPanel Orientation="Horizontal">
+                        <Image Source="{DynamicResource save_toolbarDrawingImage}" Margin="0,0,4,0"/>
+                        <TextBlock>Export</TextBlock>
+                    </StackPanel>
+                </Button>
+                
+                <Button DockPanel.Dock="Left" Style="{StaticResource TraceButton}"
+                        cal:Message.Attach="[Event Click] = [Action ZoomToFit]"
+                        ToolTip="Zoom to fit all tables in view">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="⊡" FontSize="14" Margin="0,0,4,0"/>
+                        <TextBlock>Fit</TextBlock>
+                    </StackPanel>
+                </Button>
+                
+                <ToggleButton DockPanel.Dock="Left" Style="{StaticResource TraceToggleButton}"
+                              IsChecked="{Binding ShowMiniMap}"
+                              ToolTip="Toggle mini-map navigation panel">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🗺" FontSize="14" Margin="0,0,4,0"/>
+                        <TextBlock>Map</TextBlock>
+                    </StackPanel>
+                </ToggleButton>
                 
                 <!-- Search Box -->
                 <Border DockPanel.Dock="Left" 
-                        Margin="20,6,10,6"
+                        Margin="8,4,4,4"
                         BorderBrush="{DynamicResource Theme.Brush.Table.Border}"
                         BorderThickness="1"
                         CornerRadius="3"
@@ -663,10 +703,11 @@
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="150"/>
+                            <ColumnDefinition Width="120"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="🔍" Margin="6,0,4,0" VerticalAlignment="Center" Opacity="0.6"/>
+                        <Image Grid.Column="0" Source="{DynamicResource filter_toolbarDrawingImage}" 
+                               Width="14" Height="14" Margin="6,0,4,0" VerticalAlignment="Center" Opacity="0.6"/>
                         <TextBox x:Name="SearchTextBox" Grid.Column="1"
                                  Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                                  BorderThickness="0"
@@ -674,9 +715,8 @@
                                  VerticalAlignment="Center"
                                  Padding="0,4"
                                  ToolTip="Search for tables or columns"/>
-                        <!-- Placeholder text (visible when TextBox is empty) -->
                         <TextBlock Grid.Column="1" 
-                                   Text="Search tables..." 
+                                   Text="Search..." 
                                    Foreground="Gray" 
                                    IsHitTestVisible="False"
                                    VerticalAlignment="Center"
@@ -703,122 +743,74 @@
                     </Grid>
                 </Border>
                 
-                <Button DockPanel.Dock="Right"
-                        Content="Export Image"
-                        Margin="4,8,8,8"
-                        Padding="12,4"
-                        cal:Message.Attach="[Event Click] = [Action ExportToImage]"
-                        ToolTip="Export diagram as PNG image"/>
-                
-                <ToggleButton DockPanel.Dock="Right"
-                              Content="🗺 Mini-map"
-                              Margin="4,8"
-                              Padding="12,4"
-                              IsChecked="{Binding ShowMiniMap}"
-                              ToolTip="Toggle mini-map navigation panel"/>
-                
-                <Button DockPanel.Dock="Right"
-                        Content="Zoom to Fit"
-                        Margin="4,8"
-                        Padding="12,4"
-                        cal:Message.Attach="[Event Click] = [Action ZoomToFit]"
-                        ToolTip="Zoom to fit all tables in view"/>
-                
-                <Button DockPanel.Dock="Right"
-                        Content="Clear Selection"
-                        Margin="4,8"
-                        Padding="12,4"
-                        cal:Message.Attach="[Event Click] = [Action ClearSelection]"
-                        ToolTip="Clear table selection and highlighting"/>
-                
-                <Button DockPanel.Dock="Right"
-                        Content="Copy to Clipboard"
-                        Margin="4,8"
-                        Padding="12,4"
-                        cal:Message.Attach="[Event Click] = [Action CopyToClipboard]"
-                        ToolTip="Copy diagram summary to clipboard"/>
-                
-                <!-- Query Plan Integration Filter -->
-                <Border DockPanel.Dock="Left"
-                        Margin="10,6,10,6"
-                        BorderBrush="{DynamicResource Theme.Brush.Table.Border}"
-                        BorderThickness="1"
-                        CornerRadius="3"
-                        Background="{DynamicResource Theme.Brush.Content.Back}"
-                        Visibility="{Binding HasMultipleQueries, Converter={StaticResource BoolToCollapsedConverter}}"
-                        ToolTip="{Binding QueryFilterDetails}">
-                    <StackPanel Orientation="Horizontal" Margin="4,2">
-                        <TextBlock Text="SE Query:" 
-                                   Margin="4,0,6,0" 
-                                   VerticalAlignment="Center" 
+                <!-- Query Plan Integration Filter (conditional) -->
+                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal"
+                            Visibility="{Binding HasMultipleQueries, Converter={StaticResource BoolToCollapsedConverter}}"
+                            Margin="4,0,0,0">
+                    <TextBlock Text="SE Query:" 
+                               Margin="8,0,4,0" 
+                               VerticalAlignment="Center" 
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
+                    <Button Style="{StaticResource TraceButton}"
+                            Content="◀" 
+                            Padding="4,2" 
+                            MinWidth="24"
+                            cal:Message.Attach="[Event Click] = [Action PreviousQuery]"
+                            ToolTip="{Binding QueryFilterDetails}"/>
+                    <Border Background="{DynamicResource Theme.Brush.StatusBar.Back}" 
+                            BorderBrush="{DynamicResource Theme.Brush.Table.Border}"
+                            BorderThickness="1"
+                            CornerRadius="2" 
+                            Padding="8,2" 
+                            Margin="2,4"
+                            VerticalAlignment="Center">
+                        <TextBlock Text="{Binding QueryFilterText}" 
+                                   MinWidth="40" 
+                                   TextAlignment="Center"
                                    FontWeight="SemiBold"
-                                   Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
-                        <Button Content="◀" 
-                                Padding="6,2" 
-                                MinWidth="28"
-                                cal:Message.Attach="[Event Click] = [Action PreviousQuery]"
-                                ToolTip="Previous SE query"/>
-                        <Border Background="{DynamicResource Theme.Brush.StatusBar.Back}" 
-                                BorderBrush="{DynamicResource Theme.Brush.Table.Border}"
-                                BorderThickness="1"
-                                CornerRadius="2" 
-                                Padding="10,2" 
-                                Margin="4,0">
-                            <TextBlock Text="{Binding QueryFilterText}" 
-                                       MinWidth="50" 
-                                       TextAlignment="Center"
-                                       FontWeight="SemiBold"
-                                       Foreground="{DynamicResource Theme.Brush.Default.Fore}"
-                                       VerticalAlignment="Center"/>
-                        </Border>
-                        <Button Content="▶" 
-                                Padding="6,2" 
-                                MinWidth="28"
-                                cal:Message.Attach="[Event Click] = [Action NextQuery]"
-                                ToolTip="Next SE query"/>
-                        <Button Content="All" 
-                                Padding="6,2"
-                                Margin="4,0,0,0"
-                                cal:Message.Attach="[Event Click] = [Action ClearQueryFilter]"
-                                ToolTip="Show all queries"/>
-                    </StackPanel>
-                </Border>
+                                   Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                                   VerticalAlignment="Center"/>
+                    </Border>
+                    <Button Style="{StaticResource TraceButton}"
+                            Content="▶" 
+                            Padding="4,2" 
+                            MinWidth="24"
+                            cal:Message.Attach="[Event Click] = [Action NextQuery]"
+                            ToolTip="Next SE query"/>
+                    <Button Style="{StaticResource TraceButton}"
+                            Content="All" 
+                            Padding="4,2"
+                            cal:Message.Attach="[Event Click] = [Action ClearQueryFilter]"
+                            ToolTip="Show all queries"/>
+                </StackPanel>
                 
-                <!-- Heat Map Mode Selector -->
-                <Border DockPanel.Dock="Left"
-                        Margin="10,6,10,6"
-                        BorderBrush="{DynamicResource Theme.Brush.Table.Border}"
-                        BorderThickness="1"
-                        CornerRadius="3"
-                        Background="{DynamicResource Theme.Brush.Content.Back}"
-                        ToolTip="Select what the table header colors represent">
-                    <StackPanel Orientation="Horizontal" Margin="4,2">
-                        <TextBlock Text="Heat Map:" 
-                                   Margin="4,0,6,0" 
-                                   VerticalAlignment="Center" 
-                                   FontWeight="SemiBold"
-                                   Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
-                        <RadioButton Content="Hit Count" 
-                                     IsChecked="{Binding IsHeatMapModeHitCount}"
-                                     Margin="4,0"
-                                     VerticalAlignment="Center"
-                                     cal:Message.Attach="[Event Checked] = [Action SetHeatMapModeHitCount]"
-                                     ToolTip="Color tables by number of times they appear in SE queries"/>
-                        <RadioButton Content="CPU Time" 
-                                     IsChecked="{Binding IsHeatMapModeCpuTime}"
-                                     Margin="4,0"
-                                     VerticalAlignment="Center"
-                                     cal:Message.Attach="[Event Checked] = [Action SetHeatMapModeCpuTime]"
-                                     ToolTip="Color tables by total CPU time spent in SE queries"/>
-                        <TextBlock Text="(green=low, red=high)" 
-                                   Margin="8,0,4,0" 
-                                   VerticalAlignment="Center" 
-                                   FontStyle="Italic"
-                                   FontSize="10"
-                                   Opacity="0.7"
-                                   Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
-                    </StackPanel>
-                </Border>
+                <!-- Right side: Heat Map toggle buttons -->
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="0,0,4,0">
+                    <TextBlock Text="(green→red)" 
+                               Margin="0,0,4,0" 
+                               VerticalAlignment="Center" 
+                               FontStyle="Italic"
+                               FontSize="10"
+                               Opacity="0.6"
+                               Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
+                    <ToggleButton Style="{StaticResource TraceToggleButton}"
+                                  IsChecked="{Binding IsHeatMapModeRowCount}"
+                                  ToolTip="Color tables by total rows scanned">
+                        <TextBlock>Rows</TextBlock>
+                    </ToggleButton>
+                    <ToggleButton Style="{StaticResource TraceToggleButton}"
+                                  IsChecked="{Binding IsHeatMapModeCpuTime}"
+                                  ToolTip="Color tables by total CPU time">
+                        <TextBlock>CPU</TextBlock>
+                    </ToggleButton>
+                    <ToggleButton Style="{StaticResource TraceToggleButton}"
+                                  IsChecked="{Binding IsHeatMapModeHitCount}"
+                                  ToolTip="Color tables by SE query hit count">
+                        <TextBlock>Hits</TextBlock>
+                    </ToggleButton>
+                </StackPanel>
+
             </DockPanel>
         </ctrl:ClipBorder>
         

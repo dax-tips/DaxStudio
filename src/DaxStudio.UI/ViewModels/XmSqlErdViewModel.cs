@@ -27,7 +27,12 @@ namespace DaxStudio.UI.ViewModels
         /// <summary>
         /// Color based on CPU time consumed by queries on this table.
         /// </summary>
-        CpuTime
+        CpuTime,
+        
+        /// <summary>
+        /// Color based on total rows scanned by queries on this table.
+        /// </summary>
+        RowCount
     }
 
     /// <summary>
@@ -277,6 +282,7 @@ namespace DaxStudio.UI.ViewModels
                     NotifyOfPropertyChange();
                     NotifyOfPropertyChange(nameof(IsHeatMapModeHitCount));
                     NotifyOfPropertyChange(nameof(IsHeatMapModeCpuTime));
+                    NotifyOfPropertyChange(nameof(IsHeatMapModeRowCount));
                     NotifyOfPropertyChange(nameof(HeatMapModeDescription));
                     NotifyOfPropertyChange(nameof(HeatMapLegendText));
                     CalculateHeatLevels();
@@ -303,12 +309,22 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
+        /// Whether heat map mode is set to Row Count.
+        /// </summary>
+        public bool IsHeatMapModeRowCount
+        {
+            get => _heatMapMode == HeatMapMode.RowCount;
+            set { if (value) HeatMapMode = HeatMapMode.RowCount; }
+        }
+
+        /// <summary>
         /// Description of the current heat map mode for tooltips.
         /// </summary>
         public string HeatMapModeDescription => _heatMapMode switch
         {
-            HeatMapMode.HitCount => "Table colors show how frequently each table appears in SE queries (Hit Count)",
+            HeatMapMode.HitCount => "Table colors show how frequently each table appears in SE queries",
             HeatMapMode.CpuTime => "Table colors show CPU time consumed by queries on each table",
+            HeatMapMode.RowCount => "Table colors show total rows scanned from each table",
             _ => "Table colors indicate relative activity"
         };
 
@@ -317,9 +333,10 @@ namespace DaxStudio.UI.ViewModels
         /// </summary>
         public string HeatMapLegendText => _heatMapMode switch
         {
-            HeatMapMode.HitCount => "Color: SE Query Hits",
-            HeatMapMode.CpuTime => "Color: CPU Time",
-            _ => "Color: Activity"
+            HeatMapMode.HitCount => "Hits",
+            HeatMapMode.CpuTime => "CPU",
+            HeatMapMode.RowCount => "Rows",
+            _ => "Activity"
         };
 
         /// <summary>
@@ -331,6 +348,11 @@ namespace DaxStudio.UI.ViewModels
         /// Sets heat map mode to CPU Time.
         /// </summary>
         public void SetHeatMapModeCpuTime() => HeatMapMode = HeatMapMode.CpuTime;
+
+        /// <summary>
+        /// Sets heat map mode to Row Count.
+        /// </summary>
+        public void SetHeatMapModeRowCount() => HeatMapMode = HeatMapMode.RowCount;
 
         #endregion
 
@@ -2492,47 +2514,53 @@ namespace DaxStudio.UI.ViewModels
         {
             if (Tables.Count == 0) return;
 
-            if (_heatMapMode == HeatMapMode.CpuTime)
+            switch (_heatMapMode)
             {
-                // Calculate heat based on CPU time
-                long maxCpu = Tables.Max(t => t.TotalCpuTimeMs);
-                long minCpu = Tables.Min(t => t.TotalCpuTimeMs);
-                long range = maxCpu - minCpu;
+                case HeatMapMode.CpuTime:
+                    {
+                        // Calculate heat based on CPU time
+                        long maxCpu = Tables.Max(t => t.TotalCpuTimeMs);
+                        long minCpu = Tables.Min(t => t.TotalCpuTimeMs);
+                        long range = maxCpu - minCpu;
 
-                foreach (var table in Tables)
-                {
-                    if (range > 0)
-                    {
-                        // Normalize to 0.0 - 1.0
-                        table.HeatLevel = (double)(table.TotalCpuTimeMs - minCpu) / range;
+                        foreach (var table in Tables)
+                        {
+                            table.HeatLevel = range > 0
+                                ? (double)(table.TotalCpuTimeMs - minCpu) / range
+                                : 0.5;
+                        }
+                        break;
                     }
-                    else
+                case HeatMapMode.RowCount:
                     {
-                        // All tables have same CPU time
-                        table.HeatLevel = 0.5;
-                    }
-                }
-            }
-            else
-            {
-                // Calculate heat based on hit count (default)
-                int maxHitCount = Tables.Max(t => t.HitCount);
-                int minHitCount = Tables.Min(t => t.HitCount);
-                int range = maxHitCount - minHitCount;
+                        // Calculate heat based on total rows scanned
+                        long maxRows = Tables.Max(t => t.TotalEstimatedRows);
+                        long minRows = Tables.Min(t => t.TotalEstimatedRows);
+                        long range = maxRows - minRows;
 
-                foreach (var table in Tables)
-                {
-                    if (range > 0)
-                    {
-                        // Normalize to 0.0 - 1.0
-                        table.HeatLevel = (double)(table.HitCount - minHitCount) / range;
+                        foreach (var table in Tables)
+                        {
+                            table.HeatLevel = range > 0
+                                ? (double)(table.TotalEstimatedRows - minRows) / range
+                                : 0.5;
+                        }
+                        break;
                     }
-                    else
+                default: // HitCount
                     {
-                        // All tables have same hit count
-                        table.HeatLevel = 0.5;
+                        // Calculate heat based on hit count
+                        int maxHitCount = Tables.Max(t => t.HitCount);
+                        int minHitCount = Tables.Min(t => t.HitCount);
+                        int range = maxHitCount - minHitCount;
+
+                        foreach (var table in Tables)
+                        {
+                            table.HeatLevel = range > 0
+                                ? (double)(table.HitCount - minHitCount) / range
+                                : 0.5;
+                        }
+                        break;
                     }
-                }
             }
         }
 
