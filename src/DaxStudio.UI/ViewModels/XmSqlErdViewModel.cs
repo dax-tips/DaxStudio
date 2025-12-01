@@ -606,9 +606,9 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
-        /// Lays out the tables on the canvas using a relationship-aware algorithm.
-        /// Tables connected by relationships are placed closer together.
-        /// Fact tables (many relationships) go in center, dimension tables around them.
+        /// Lays out the tables on the canvas using Sugiyama-style layered graph drawing algorithm.
+        /// Tables connected by relationships are placed in hierarchical layers.
+        /// Dimension tables (on the "one" side) go at the top, fact tables (on the "many" side) at the bottom.
         /// </summary>
         private void LayoutDiagram()
         {
@@ -616,47 +616,22 @@ namespace DaxStudio.UI.ViewModels
 
             const double tableWidth = 200;
             const double tableHeight = 180;
-            const double horizontalSpacing = 120;
-            const double verticalSpacing = 80;
-            const double padding = 40;
+            const double horizontalSpacing = 100;
+            const double verticalSpacing = 120;
+            const double padding = 50;
 
-            // Build relationship map to understand connectivity
-            var relationshipMap = BuildRelationshipMap();
-
-            // Find fact tables (tables with most relationships) vs dimension tables
-            var tablesByConnections = Tables
-                .OrderByDescending(t => relationshipMap.TryGetValue(t.TableName, out var connections) ? connections.Count : 0)
-                .ThenByDescending(t => t.HitCount)
-                .ToList();
-
-            // Choose layout based on table count
-            if (Tables.Count == 1)
-            {
-                // Single table - just center it
-                Tables[0].X = padding;
-                Tables[0].Y = padding;
-                Tables[0].Width = tableWidth;
-                Tables[0].Height = tableHeight;
-            }
-            else if (Tables.Count == 2)
-            {
-                // Two tables - place side by side
-                LayoutHorizontal(tablesByConnections, tableWidth, tableHeight, horizontalSpacing, padding);
-            }
-            else if (Tables.Count <= 4)
-            {
-                // 3-4 tables - use grid layout (better than cramped circle)
-                LayoutGrid(tablesByConnections, relationshipMap, tableWidth, tableHeight, horizontalSpacing, verticalSpacing, padding);
-            }
-            else
-            {
-                // 5+ tables - use star layout with most connected table in center
-                LayoutStar(tablesByConnections, relationshipMap, tableWidth, tableHeight, horizontalSpacing, verticalSpacing, padding);
-            }
+            // Step 1: Assign tables to layers based on longest path from root nodes
+            var layers = AssignLayers();
+            
+            // Step 2: Order tables within each layer to minimize edge crossings
+            MinimizeCrossings(layers);
+            
+            // Step 3: Assign X coordinates using barycenter method
+            AssignCoordinates(layers, tableWidth, tableHeight, horizontalSpacing, verticalSpacing, padding);
 
             // Calculate canvas size to fit all tables
-            var maxX = Tables.Max(t => t.X + t.Width);
-            var maxY = Tables.Max(t => t.Y + t.Height);
+            var maxX = Tables.Any() ? Tables.Max(t => t.X + t.Width) : 100;
+            var maxY = Tables.Any() ? Tables.Max(t => t.Y + t.Height) : 100;
             CanvasWidth = Math.Max(100, maxX + padding);
             CanvasHeight = Math.Max(100, maxY + padding);
 
@@ -668,185 +643,506 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
-        /// Builds a map of table name to connected table names.
+        /// Assigns tables to layers using longest-path layering (Sugiyama Step 2).
+        /// The "one" side of relationships (dimensions) are placed above the "many" side (facts).
         /// </summary>
-        private Dictionary<string, HashSet<string>> BuildRelationshipMap()
+        private List<List<ErdTableViewModel>> AssignLayers()
+        {
+            var layers = new List<List<ErdTableViewModel>>();
+            var tableLayer = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            
+            // Build directed adjacency: from "one" side to "many" side (dimension -> fact)
+            var adjacencyToMany = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var adjacencyFromMany = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var inDegree = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            
+            foreach (var table in Tables)
+            {
+                adjacencyToMany[table.TableName] = new List<string>();
+                adjacencyFromMany[table.TableName] = new List<string>();
+                inDegree[table.TableName] = 0;
+            }
+            
+            // Direction: from "1" side (dimension) to "*" side (fact)
+            foreach (var rel in Relationships)
+            {
+                string fromTable, toTable;
+                
+                // Determine direction based on cardinality
+                // "1" side points to "*" side (filter flows from one to many)
+                if (rel.FromCardinalitySymbol == "1" && rel.ToCardinalitySymbol == "*")
+                {
+                    fromTable = rel.FromTable;
+                    toTable = rel.ToTable;
+                }
+                else if (rel.ToCardinalitySymbol == "1" && rel.FromCardinalitySymbol == "*")
+                {
+                    fromTable = rel.ToTable;
+                    toTable = rel.FromTable;
+                }
+                else
+                {
+                    // Same cardinality on both sides - use alphabetical order for consistency
+                    if (string.Compare(rel.FromTable, rel.ToTable, StringComparison.OrdinalIgnoreCase) < 0)
+                    {
+                        fromTable = rel.FromTable;
+                        toTable = rel.ToTable;
+                    }
+                    else
+                    {
+                        fromTable = rel.ToTable;
+                        toTable = rel.FromTable;
+                    }
+                }
+                
+                if (adjacencyToMany.ContainsKey(fromTable) && adjacencyFromMany.ContainsKey(toTable))
+                {
+                    if (!adjacencyToMany[fromTable].Contains(toTable))
+                    {
+                        adjacencyToMany[fromTable].Add(toTable);
+                        adjacencyFromMany[toTable].Add(fromTable);
+                        inDegree[toTable]++;
+                    }
+                }
+            }
+            
+            // Find root nodes (tables with no incoming edges - top-level dimensions)
+            var rootNodes = Tables.Where(t => inDegree[t.TableName] == 0).ToList();
+            
+            // If no clear roots (cyclic), pick tables with most outgoing edges as roots
+            if (!rootNodes.Any())
+            {
+                rootNodes = Tables
+                    .OrderByDescending(t => adjacencyToMany[t.TableName].Count)
+                    .ThenBy(t => adjacencyFromMany[t.TableName].Count)
+                    .Take(Math.Max(1, Tables.Count / 3))
+                    .ToList();
+            }
+            
+            // Assign layers using BFS from root nodes (topological ordering)
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var queue = new Queue<(ErdTableViewModel table, int layer)>();
+            
+            foreach (var root in rootNodes)
+            {
+                queue.Enqueue((root, 0));
+                visited.Add(root.TableName);
+            }
+            
+            // Process tables level by level
+            while (queue.Count > 0)
+            {
+                var (table, layer) = queue.Dequeue();
+                
+                // Ensure layer exists
+                while (layers.Count <= layer)
+                    layers.Add(new List<ErdTableViewModel>());
+                
+                layers[layer].Add(table);
+                tableLayer[table.TableName] = layer;
+                
+                // Add connected tables at next layer
+                foreach (var childName in adjacencyToMany[table.TableName])
+                {
+                    if (!visited.Contains(childName))
+                    {
+                        visited.Add(childName);
+                        var childTable = Tables.FirstOrDefault(t => t.TableName.Equals(childName, StringComparison.OrdinalIgnoreCase));
+                        if (childTable != null)
+                        {
+                            queue.Enqueue((childTable, layer + 1));
+                        }
+                    }
+                }
+            }
+            
+            // Add any remaining unvisited tables (disconnected components) to a new layer
+            var unvisited = Tables.Where(t => !visited.Contains(t.TableName)).ToList();
+            if (unvisited.Any())
+            {
+                layers.Add(unvisited);
+            }
+            
+            return layers;
+        }
+
+        /// <summary>
+        /// Minimizes edge crossings using barycenter heuristic (Sugiyama Step 4).
+        /// Multiple passes: sweep down then up repeatedly.
+        /// </summary>
+        private void MinimizeCrossings(List<List<ErdTableViewModel>> layers)
+        {
+            if (layers.Count < 2) return;
+            
+            // Build adjacency map
+            var neighbors = BuildNeighborMap();
+            
+            // Multiple passes of crossing minimization using barycenter heuristic
+            const int maxIterations = 4;
+            
+            for (int iter = 0; iter < maxIterations; iter++)
+            {
+                // Downward sweep: order layer i based on positions in layer i-1
+                for (int i = 1; i < layers.Count; i++)
+                {
+                    OrderLayerByBarycenter(layers[i], layers[i - 1], neighbors);
+                }
+                
+                // Upward sweep: order layer i based on positions in layer i+1
+                for (int i = layers.Count - 2; i >= 0; i--)
+                {
+                    OrderLayerByBarycenter(layers[i], layers[i + 1], neighbors);
+                }
+            }
+            
+            // Post-processing: swap adjacent tables if it reduces crossings
+            OptimizeCrossingsWithSwaps(layers, neighbors);
+        }
+
+        /// <summary>
+        /// Post-processing step to reduce edge crossings by swapping adjacent tables within layers.
+        /// </summary>
+        private void OptimizeCrossingsWithSwaps(List<List<ErdTableViewModel>> layers, 
+            Dictionary<string, HashSet<string>> neighbors)
+        {
+            bool improved = true;
+            int maxPasses = 3;
+            int pass = 0;
+            
+            while (improved && pass < maxPasses)
+            {
+                improved = false;
+                pass++;
+                
+                // Try swapping adjacent pairs in each layer
+                for (int layerIdx = 0; layerIdx < layers.Count; layerIdx++)
+                {
+                    var layer = layers[layerIdx];
+                    
+                    // Get adjacent layers for crossing calculation
+                    var upperLayer = layerIdx > 0 ? layers[layerIdx - 1] : null;
+                    var lowerLayer = layerIdx < layers.Count - 1 ? layers[layerIdx + 1] : null;
+                    
+                    // Try swapping each adjacent pair
+                    for (int i = 0; i < layer.Count - 1; i++)
+                    {
+                        int currentCrossings = CountCrossingsForPair(layer, i, i + 1, upperLayer, lowerLayer, neighbors);
+                        
+                        // Swap and count
+                        var temp = layer[i];
+                        layer[i] = layer[i + 1];
+                        layer[i + 1] = temp;
+                        
+                        int swappedCrossings = CountCrossingsForPair(layer, i, i + 1, upperLayer, lowerLayer, neighbors);
+                        
+                        if (swappedCrossings < currentCrossings)
+                        {
+                            // Keep the swap
+                            improved = true;
+                        }
+                        else
+                        {
+                            // Revert the swap
+                            temp = layer[i];
+                            layer[i] = layer[i + 1];
+                            layer[i + 1] = temp;
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Counts edge crossings involving two specific positions in a layer.
+        /// </summary>
+        private int CountCrossingsForPair(List<ErdTableViewModel> layer, int pos1, int pos2,
+            List<ErdTableViewModel> upperLayer, List<ErdTableViewModel> lowerLayer,
+            Dictionary<string, HashSet<string>> neighbors)
+        {
+            int crossings = 0;
+            
+            var table1 = layer[pos1];
+            var table2 = layer[pos2];
+            
+            // Check crossings with upper layer
+            if (upperLayer != null)
+            {
+                crossings += CountCrossingsBetweenTables(table1, pos1, table2, pos2, upperLayer, neighbors);
+            }
+            
+            // Check crossings with lower layer
+            if (lowerLayer != null)
+            {
+                crossings += CountCrossingsBetweenTables(table1, pos1, table2, pos2, lowerLayer, neighbors);
+            }
+            
+            return crossings;
+        }
+
+        /// <summary>
+        /// Counts crossings between edges from two tables to an adjacent layer.
+        /// </summary>
+        private int CountCrossingsBetweenTables(ErdTableViewModel table1, int pos1,
+            ErdTableViewModel table2, int pos2,
+            List<ErdTableViewModel> adjacentLayer,
+            Dictionary<string, HashSet<string>> neighbors)
+        {
+            int crossings = 0;
+            
+            // Get neighbors of table1 in adjacent layer
+            var neighbors1 = new List<int>();
+            if (neighbors.TryGetValue(table1.TableName, out var n1))
+            {
+                for (int i = 0; i < adjacentLayer.Count; i++)
+                {
+                    if (n1.Contains(adjacentLayer[i].TableName))
+                        neighbors1.Add(i);
+                }
+            }
+            
+            // Get neighbors of table2 in adjacent layer
+            var neighbors2 = new List<int>();
+            if (neighbors.TryGetValue(table2.TableName, out var n2))
+            {
+                for (int i = 0; i < adjacentLayer.Count; i++)
+                {
+                    if (n2.Contains(adjacentLayer[i].TableName))
+                        neighbors2.Add(i);
+                }
+            }
+            
+            // Count crossings: edge from table1 (at pos1) to adj[i] crosses edge from table2 (at pos2) to adj[j]
+            // if (pos1 < pos2 and i > j) or (pos1 > pos2 and i < j)
+            foreach (int adjPos1 in neighbors1)
+            {
+                foreach (int adjPos2 in neighbors2)
+                {
+                    // Crossing occurs when the relative order is different
+                    if ((pos1 < pos2 && adjPos1 > adjPos2) || (pos1 > pos2 && adjPos1 < adjPos2))
+                    {
+                        crossings++;
+                    }
+                }
+            }
+            
+            return crossings;
+        }
+
+        /// <summary>
+        /// Orders a layer based on the average position of neighbors in the reference layer (barycenter).
+        /// </summary>
+        private void OrderLayerByBarycenter(List<ErdTableViewModel> layer, 
+            List<ErdTableViewModel> referenceLayer, 
+            Dictionary<string, HashSet<string>> neighbors)
+        {
+            // Calculate barycenter for each table in the layer
+            var barycenters = new Dictionary<ErdTableViewModel, double>();
+            
+            for (int i = 0; i < referenceLayer.Count; i++)
+            {
+                // Position index of reference table
+                var refTable = referenceLayer[i];
+                if (!neighbors.ContainsKey(refTable.TableName)) continue;
+                
+                foreach (var neighborName in neighbors[refTable.TableName])
+                {
+                    var neighborTable = layer.FirstOrDefault(t => t.TableName.Equals(neighborName, StringComparison.OrdinalIgnoreCase));
+                    if (neighborTable != null)
+                    {
+                        if (!barycenters.ContainsKey(neighborTable))
+                            barycenters[neighborTable] = 0;
+                        barycenters[neighborTable] += i;
+                    }
+                }
+            }
+            
+            // Normalize by number of neighbors
+            foreach (var table in layer)
+            {
+                if (barycenters.ContainsKey(table) && neighbors.ContainsKey(table.TableName))
+                {
+                    int neighborCount = neighbors[table.TableName].Count(n => 
+                        referenceLayer.Any(r => r.TableName.Equals(n, StringComparison.OrdinalIgnoreCase)));
+                    if (neighborCount > 0)
+                        barycenters[table] /= neighborCount;
+                }
+                else
+                {
+                    // Tables with no neighbors get a high barycenter (placed at end)
+                    barycenters[table] = double.MaxValue / 2;
+                }
+            }
+            
+            // Sort layer by barycenter
+            var sorted = layer.OrderBy(t => barycenters.TryGetValue(t, out var bc) ? bc : double.MaxValue / 2)
+                              .ThenBy(t => t.TableName)
+                              .ToList();
+            
+            layer.Clear();
+            layer.AddRange(sorted);
+        }
+
+        /// <summary>
+        /// Builds a map of table name to all connected table names.
+        /// </summary>
+        private Dictionary<string, HashSet<string>> BuildNeighborMap()
         {
             var map = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
             
-            foreach (var rel in _analysis.Relationships)
+            foreach (var table in Tables)
             {
-                if (!map.ContainsKey(rel.FromTable))
-                    map[rel.FromTable] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                if (!map.ContainsKey(rel.ToTable))
-                    map[rel.ToTable] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                
-                map[rel.FromTable].Add(rel.ToTable);
-                map[rel.ToTable].Add(rel.FromTable);
+                map[table.TableName] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+            
+            foreach (var rel in Relationships)
+            {
+                if (map.ContainsKey(rel.FromTable))
+                    map[rel.FromTable].Add(rel.ToTable);
+                if (map.ContainsKey(rel.ToTable))
+                    map[rel.ToTable].Add(rel.FromTable);
             }
             
             return map;
         }
 
         /// <summary>
-        /// Layout tables horizontally in a single row (for small diagrams).
+        /// Assigns X coordinates to tables, trying to align connected tables (Sugiyama Step 5).
+        /// Uses barycenter alignment with priority to minimize total edge length.
         /// </summary>
-        private void LayoutHorizontal(List<ErdTableViewModel> tables, double tableWidth, double tableHeight, double spacing, double padding)
+        private void AssignCoordinates(List<List<ErdTableViewModel>> layers,
+            double tableWidth, double tableHeight, double hSpacing, double vSpacing, double padding)
         {
-            double x = padding;
-            foreach (var table in tables)
+            var neighbors = BuildNeighborMap();
+            
+            // First pass: simple left-to-right placement
+            for (int layerIndex = 0; layerIndex < layers.Count; layerIndex++)
             {
-                table.X = x;
-                table.Y = padding;
-                table.Width = tableWidth;
-                table.Height = tableHeight;
-                x += tableWidth + spacing;
+                var layer = layers[layerIndex];
+                double y = padding + layerIndex * (tableHeight + vSpacing);
+                double x = padding;
+                
+                foreach (var table in layer)
+                {
+                    table.X = x;
+                    table.Y = y;
+                    table.Width = tableWidth;
+                    table.Height = tableHeight;
+                    x += tableWidth + hSpacing;
+                }
             }
+            
+            // Second pass: adjust X positions based on connected tables (Brandes-Köpf inspired)
+            // Pull tables toward their connected tables in adjacent layers
+            const int refinementIterations = 3;
+            
+            for (int iter = 0; iter < refinementIterations; iter++)
+            {
+                // Downward pass: align with upper neighbors
+                for (int layerIndex = 1; layerIndex < layers.Count; layerIndex++)
+                {
+                    AdjustLayerPositions(layers[layerIndex], layers[layerIndex - 1], neighbors, tableWidth, hSpacing, padding);
+                }
+                
+                // Upward pass: align with lower neighbors
+                for (int layerIndex = layers.Count - 2; layerIndex >= 0; layerIndex--)
+                {
+                    AdjustLayerPositions(layers[layerIndex], layers[layerIndex + 1], neighbors, tableWidth, hSpacing, padding);
+                }
+            }
+            
+            // Final centering: center all layers relative to the widest layer
+            CenterAllLayers(layers, tableWidth, hSpacing, padding);
         }
 
         /// <summary>
-        /// Layout 3-4 tables in a smart grid pattern based on relationships.
-        /// Places the most connected table (fact) in center-bottom, dimensions around it.
+        /// Adjusts positions of tables in a layer to align with connected tables.
         /// </summary>
-        private void LayoutGrid(List<ErdTableViewModel> tables, Dictionary<string, HashSet<string>> relationshipMap,
-            double tableWidth, double tableHeight, double hSpacing, double vSpacing, double padding)
+        private void AdjustLayerPositions(List<ErdTableViewModel> layer,
+            List<ErdTableViewModel> referenceLayer,
+            Dictionary<string, HashSet<string>> neighbors,
+            double tableWidth, double hSpacing, double padding)
         {
-            // For 3-4 tables, use a diamond/grid arrangement
-            // Most connected table (fact) goes center-bottom or bottom
-            // Other tables (dimensions) go around the top
+            // Calculate target X for each table based on average neighbor position
+            var targetX = new Dictionary<ErdTableViewModel, double>();
             
-            if (tables.Count == 3)
+            foreach (var table in layer)
             {
-                // Triangle layout: 2 on top, 1 (fact) on bottom center
-                //    [dim1]     [dim2]
-                //         [fact]
-                var factTable = tables[0];
-                var dim1 = tables[1];
-                var dim2 = tables[2];
-                
-                double totalWidth = 2 * tableWidth + hSpacing;
-                double startX = padding;
-                
-                // Top row - dimensions
-                dim1.X = startX;
-                dim1.Y = padding;
-                dim1.Width = tableWidth;
-                dim1.Height = tableHeight;
-                
-                dim2.X = startX + tableWidth + hSpacing;
-                dim2.Y = padding;
-                dim2.Width = tableWidth;
-                dim2.Height = tableHeight;
-                
-                // Bottom row - fact table centered
-                factTable.X = startX + (totalWidth - tableWidth) / 2;
-                factTable.Y = padding + tableHeight + vSpacing;
-                factTable.Width = tableWidth;
-                factTable.Height = tableHeight;
+                if (neighbors.TryGetValue(table.TableName, out var tableNeighbors))
+                {
+                    var connectedInRef = referenceLayer
+                        .Where(r => tableNeighbors.Contains(r.TableName))
+                        .ToList();
+                    
+                    if (connectedInRef.Any())
+                    {
+                        // Target is average center X of connected tables
+                        targetX[table] = connectedInRef.Average(t => t.X + tableWidth / 2) - tableWidth / 2;
+                    }
+                }
             }
-            else if (tables.Count == 4)
+            
+            // Sort layer by current X position
+            var sortedLayer = layer.OrderBy(t => t.X).ToList();
+            
+            // Adjust positions while maintaining order and minimum spacing
+            for (int i = 0; i < sortedLayer.Count; i++)
             {
-                // Diamond layout: 1 top, 2 middle, 1 (fact) bottom
-                // Or: fact in center, dimensions at corners
-                //        [dim1]
-                //   [dim2]    [dim3]
-                //        [fact]
-                var factTable = tables[0];
-                var dim1 = tables[1];
-                var dim2 = tables[2];
-                var dim3 = tables[3];
+                var table = sortedLayer[i];
+                double minX = (i == 0) ? padding : sortedLayer[i - 1].X + tableWidth + hSpacing;
                 
-                double centerX = padding + tableWidth + hSpacing / 2;
-                
-                // Top - dimension 1
-                dim1.X = centerX - tableWidth / 2;
-                dim1.Y = padding;
-                dim1.Width = tableWidth;
-                dim1.Height = tableHeight;
-                
-                // Middle row - dimensions 2 and 3
-                dim2.X = padding;
-                dim2.Y = padding + tableHeight + vSpacing;
-                dim2.Width = tableWidth;
-                dim2.Height = tableHeight;
-                
-                dim3.X = padding + tableWidth + hSpacing;
-                dim3.Y = padding + tableHeight + vSpacing;
-                dim3.Width = tableWidth;
-                dim3.Height = tableHeight;
-                
-                // Bottom - fact table centered
-                factTable.X = centerX - tableWidth / 2;
-                factTable.Y = padding + 2 * (tableHeight + vSpacing);
-                factTable.Width = tableWidth;
-                factTable.Height = tableHeight;
-            }
-        }
-
-        /// <summary>
-        /// Layout tables in a star pattern with most connected table(s) in center.
-        /// </summary>
-        private void LayoutStar(List<ErdTableViewModel> tables, Dictionary<string, HashSet<string>> relationshipMap, 
-            double tableWidth, double tableHeight, double hSpacing, double vSpacing, double padding)
-        {
-            // Calculate center position for the most connected table
-            var centerTable = tables[0];
-            var outerTables = tables.Skip(1).ToList();
-            
-            // If there are many tables, arrange them in tiers
-            var tier1 = new List<ErdTableViewModel>(); // Directly connected to center
-            var tier2 = new List<ErdTableViewModel>(); // Not directly connected
-            
-            var centerConnections = relationshipMap.TryGetValue(centerTable.TableName, out var conn) ? conn : new HashSet<string>();
-            
-            foreach (var table in outerTables)
-            {
-                if (centerConnections.Contains(table.TableName))
-                    tier1.Add(table);
+                if (targetX.TryGetValue(table, out double target))
+                {
+                    // Move toward target, but not past minimum
+                    double newX = Math.Max(minX, target);
+                    
+                    // Don't move too far (dampen to avoid oscillation)
+                    double maxMove = (tableWidth + hSpacing) / 2;
+                    double move = Math.Min(Math.Abs(newX - table.X), maxMove);
+                    if (newX > table.X)
+                        table.X = Math.Max(minX, table.X + move);
+                    else if (newX < table.X)
+                        table.X = Math.Max(minX, table.X - move);
+                }
                 else
-                    tier2.Add(table);
-            }
-            
-            // Place center table
-            double tier1Radius = tableWidth + hSpacing;
-            double tier2Radius = tier1Radius + tableWidth + hSpacing;
-            
-            // Calculate center based on number of tiers needed
-            double centerX = padding + (tier2.Any() ? tier2Radius : tier1Radius);
-            double centerY = padding + (tier2.Any() ? tier2Radius : tier1Radius);
-            
-            centerTable.X = centerX;
-            centerTable.Y = centerY;
-            centerTable.Width = tableWidth;
-            centerTable.Height = tableHeight;
-            
-            // Place tier 1 tables (directly connected) in a circle around center
-            LayoutInCircle(tier1, centerX + tableWidth/2, centerY + tableHeight/2, tier1Radius, tableWidth, tableHeight);
-            
-            // Place tier 2 tables (not directly connected) in outer circle
-            if (tier2.Any())
-            {
-                LayoutInCircle(tier2, centerX + tableWidth/2, centerY + tableHeight/2, tier2Radius, tableWidth, tableHeight);
+                {
+                    // No target - just ensure minimum spacing
+                    if (table.X < minX)
+                        table.X = minX;
+                }
             }
         }
 
         /// <summary>
-        /// Layout tables in a circle around a center point.
+        /// Centers all layers relative to the widest layer.
         /// </summary>
-        private void LayoutInCircle(List<ErdTableViewModel> tables, double centerX, double centerY, double radius, double tableWidth, double tableHeight)
+        private void CenterAllLayers(List<List<ErdTableViewModel>> layers,
+            double tableWidth, double hSpacing, double padding)
         {
-            if (tables.Count == 0) return;
+            if (!layers.Any()) return;
             
-            double angleStep = 2 * Math.PI / tables.Count;
-            double startAngle = -Math.PI / 2; // Start from top
-            
-            for (int i = 0; i < tables.Count; i++)
+            // Find the widest layer
+            double maxWidth = 0;
+            foreach (var layer in layers)
             {
-                double angle = startAngle + i * angleStep;
-                tables[i].X = centerX + radius * Math.Cos(angle) - tableWidth / 2;
-                tables[i].Y = centerY + radius * Math.Sin(angle) - tableHeight / 2;
-                tables[i].Width = tableWidth;
-                tables[i].Height = tableHeight;
+                if (layer.Any())
+                {
+                    double layerWidth = layer.Max(t => t.X + tableWidth) - layer.Min(t => t.X);
+                    maxWidth = Math.Max(maxWidth, layerWidth);
+                }
+            }
+            
+            // Center each layer
+            foreach (var layer in layers)
+            {
+                if (!layer.Any()) continue;
+                
+                double layerWidth = layer.Max(t => t.X + tableWidth) - layer.Min(t => t.X);
+                double offset = (maxWidth - layerWidth) / 2;
+                
+                foreach (var table in layer)
+                {
+                    table.X += offset;
+                }
             }
         }
 
