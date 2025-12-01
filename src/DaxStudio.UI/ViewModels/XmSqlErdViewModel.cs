@@ -3365,20 +3365,40 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
+        /// Calculates the header height based on which info rows are visible.
+        /// </summary>
+        private double CalculateHeaderHeight()
+        {
+            // Base: title bar (~30) + resize grip (~8) + padding (~5) = ~43px
+            double height = 43;
+            
+            // Row 1: Row count info (visible when HasRowCountData)
+            if (HasRowCountData) height += 20;
+            
+            // Row 2: Duration-only row (visible when no row count but has duration)
+            else if (HasDurationData) height += 20;
+            
+            // Row 3: SE Event Data row (cache, parallel, CPU)
+            if (HasCacheData || HasParallelData || HasSignificantCpu) height += 20;
+            
+            return height;
+        }
+
+        /// <summary>
         /// Current height of the table - calculated based on content for relationship line positioning.
-        /// Header area includes: title bar (~30), metrics rows (~35), padding (~10) = ~75px
+        /// Height varies based on which info rows are visible.
         /// </summary>
         public double Height
         {
             get
             {
                 if (IsCollapsed) return CollapsedHeight;
-                // Approximate height: header area (~75) + columns area
-                return 75 + _columnsHeight;
+                // Dynamic header height + columns area
+                return CalculateHeaderHeight() + _columnsHeight;
             }
         }
 
-        private double _columnsHeight = 105; // Default matches tableHeight (180) - headerHeight (75)
+        private double _columnsHeight = 105; // Default columns area height
         /// <summary>
         /// Height of the columns area (resizable by user).
         /// </summary>
