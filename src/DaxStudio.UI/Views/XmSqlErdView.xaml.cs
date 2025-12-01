@@ -20,6 +20,12 @@ namespace DaxStudio.UI.Views
         private ErdTableViewModel _draggedTable;
         private FrameworkElement _draggedElement;
         private UIElement _coordinateRoot;
+        
+        // Canvas panning state
+        private bool _isPanningCanvas;
+        private Point _panStartPoint;
+        private double _panStartHorizontalOffset;
+        private double _panStartVerticalOffset;
 
         public XmSqlErdView()
         {
@@ -272,14 +278,62 @@ namespace DaxStudio.UI.Views
 
         private void Canvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            // Click on empty canvas area clears selection
+            // Click on empty canvas area - start panning or clear selection
             if (e.OriginalSource is FrameworkElement fe && 
                 !(fe.DataContext is ErdTableViewModel))
             {
+                // Start canvas panning
+                _isPanningCanvas = true;
+                _panStartPoint = e.GetPosition(MainScrollViewer);
+                _panStartHorizontalOffset = MainScrollViewer.HorizontalOffset;
+                _panStartVerticalOffset = MainScrollViewer.VerticalOffset;
+                
+                // Capture mouse on the canvas grid
+                if (sender is FrameworkElement element)
+                {
+                    element.CaptureMouse();
+                    element.Cursor = Cursors.Hand;
+                }
+                
+                // Also clear selection when clicking empty area
                 if (DataContext is XmSqlErdViewModel erdVm)
                 {
                     erdVm.ClearSelection();
                 }
+                
+                e.Handled = true;
+            }
+        }
+
+        private void Canvas_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_isPanningCanvas && e.LeftButton == MouseButtonState.Pressed)
+            {
+                var currentPoint = e.GetPosition(MainScrollViewer);
+                var deltaX = currentPoint.X - _panStartPoint.X;
+                var deltaY = currentPoint.Y - _panStartPoint.Y;
+                
+                // Scroll in the opposite direction of mouse movement (natural panning)
+                MainScrollViewer.ScrollToHorizontalOffset(_panStartHorizontalOffset - deltaX);
+                MainScrollViewer.ScrollToVerticalOffset(_panStartVerticalOffset - deltaY);
+                
+                e.Handled = true;
+            }
+        }
+
+        private void Canvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (_isPanningCanvas)
+            {
+                _isPanningCanvas = false;
+                
+                if (sender is FrameworkElement element)
+                {
+                    element.ReleaseMouseCapture();
+                    element.Cursor = Cursors.Arrow;
+                }
+                
+                e.Handled = true;
             }
         }
 

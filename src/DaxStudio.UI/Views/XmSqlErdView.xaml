@@ -842,6 +842,8 @@
                   Width="{Binding CanvasWidth}" 
                   Height="{Binding CanvasHeight}"
                   MouseLeftButtonDown="Canvas_MouseLeftButtonDown"
+                  MouseMove="Canvas_MouseMove"
+                  MouseLeftButtonUp="Canvas_MouseLeftButtonUp"
                   Background="{DynamicResource Theme.Brush.Content.Back}">
                 <Grid.LayoutTransform>
                     <ScaleTransform x:Name="CanvasScaleTransform" ScaleX="1" ScaleY="1"/>
