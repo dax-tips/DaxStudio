@@ -752,22 +752,73 @@ namespace DaxStudio.UI.Views
             }
         }
 
+        #endregion
+
+        #region Canvas Panning
+
+        private bool _isPanning;
+        private Point _panStartPoint;
+        private double _panStartHorizontalOffset;
+        private double _panStartVerticalOffset;
+
         /// <summary>
-        /// Handles left-click on the canvas background to clear selection.
+        /// Handles left-click on the canvas background to start panning or clear selection.
         /// </summary>
         private void Canvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            // Only clear if clicking directly on the canvas (not on a table or relationship)
+            // Only handle if clicking directly on the canvas background (not on a table or relationship)
             if (e.OriginalSource is FrameworkElement element)
             {
                 // Check if we clicked on the background Grid itself
                 if (element.Name == "DiagramGrid" || element.DataContext == DataContext)
                 {
+                    // Start panning
+                    _isPanning = true;
+                    _panStartPoint = e.GetPosition(MainScrollViewer);
+                    _panStartHorizontalOffset = MainScrollViewer.HorizontalOffset;
+                    _panStartVerticalOffset = MainScrollViewer.VerticalOffset;
+                    DiagramGrid.CaptureMouse();
+                    DiagramGrid.Cursor = System.Windows.Input.Cursors.Hand;
+                    
+                    // Also clear selection
                     if (DataContext is ModelDiagramViewModel vm)
                     {
                         vm.ClearSelection();
                     }
+                    
+                    e.Handled = true;
                 }
+            }
+        }
+
+        /// <summary>
+        /// Handles mouse up on canvas to end panning.
+        /// </summary>
+        private void Canvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (_isPanning)
+            {
+                _isPanning = false;
+                DiagramGrid.ReleaseMouseCapture();
+                DiagramGrid.Cursor = System.Windows.Input.Cursors.Arrow;
+                e.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// Handles mouse move on canvas for panning.
+        /// </summary>
+        private void Canvas_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_isPanning && e.LeftButton == MouseButtonState.Pressed)
+            {
+                var currentPoint = e.GetPosition(MainScrollViewer);
+                var deltaX = currentPoint.X - _panStartPoint.X;
+                var deltaY = currentPoint.Y - _panStartPoint.Y;
+
+                // Pan in the opposite direction of mouse movement (like dragging a piece of paper)
+                MainScrollViewer.ScrollToHorizontalOffset(_panStartHorizontalOffset - deltaX);
+                MainScrollViewer.ScrollToVerticalOffset(_panStartVerticalOffset - deltaY);
             }
         }
 

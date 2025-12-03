@@ -23,6 +23,7 @@
 
             <conv:BoolToCollapsedConverter x:Key="BoolToVisibilityConverter" />
             <conv:BoolToCollapsedConverter x:Key="BoolToCollapsedConverter" />
+            <conv:StringToVisibilityConverter x:Key="StringToVisibilityConverter" />
             
             <!-- Column Item Style -->
             <Style x:Key="ColumnItemStyle" TargetType="Border">
@@ -33,7 +34,7 @@
 
             <!-- Table Card Template -->
             <DataTemplate x:Key="TableCardTemplate" DataType="{x:Type vm:ModelDiagramTableViewModel}">
-                <Grid Width="{Binding Width}" Height="{Binding Height}" MinWidth="150" MinHeight="80">
+                <Grid Width="{Binding Width}" Height="{Binding Height}" MinWidth="150" MinHeight="32">
                     <Grid.Style>
                         <Style TargetType="Grid">
                             <Setter Property="Visibility" Value="Visible"/>
@@ -798,7 +799,9 @@
                   Width="{Binding CanvasWidth}" 
                   Height="{Binding CanvasHeight}"
                   Background="{DynamicResource Theme.Brush.Content.Back}"
-                  MouseLeftButtonDown="Canvas_MouseLeftButtonDown">
+                  MouseLeftButtonDown="Canvas_MouseLeftButtonDown"
+                  MouseLeftButtonUp="Canvas_MouseLeftButtonUp"
+                  MouseMove="Canvas_MouseMove">
                 <Grid.LayoutTransform>
                     <ScaleTransform x:Name="CanvasScaleTransform" ScaleX="1" ScaleY="1"/>
                 </Grid.LayoutTransform>
@@ -970,6 +973,7 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 
                 <TextBlock Grid.Column="0"
@@ -977,8 +981,19 @@
                            VerticalAlignment="Center"
                            Foreground="{DynamicResource Theme.Brush.Default.Fore}"/>
                 
+                <!-- Loading Stats (timing info) -->
+                <TextBlock Grid.Column="1"
+                           Text="{Binding LoadingStats}"
+                           VerticalAlignment="Center"
+                           FontSize="10"
+                           Opacity="0.7"
+                           Margin="16,0,0,0"
+                           Foreground="{DynamicResource Theme.Brush.Default.Fore}"
+                           Visibility="{Binding LoadingStats, Converter={StaticResource StringToVisibilityConverter}}"
+                           ToolTip="Time taken to load and render the diagram"/>
+                
                 <!-- Legend -->
-                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
                     <!-- Table Types -->
                     <Border Background="#2196F3" Width="12" Height="12" CornerRadius="2" Margin="8,0,4,0"/>
                     <TextBlock Text="Table" VerticalAlignment="Center" Margin="0,0,10,0" FontSize="10"
@@ -1028,10 +1043,34 @@
                 Background="#80000000"
                 Visibility="{Binding IsLoading, Converter={StaticResource BoolToCollapsedConverter}}">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                <TextBlock Text="Loading diagram..." 
+                <!-- Spinner animation -->
+                <Border Width="40" Height="40" Margin="0,0,0,16">
+                    <Border.RenderTransform>
+                        <RotateTransform x:Name="SpinnerRotation" CenterX="20" CenterY="20"/>
+                    </Border.RenderTransform>
+                    <Border.Triggers>
+                        <EventTrigger RoutedEvent="Border.Loaded">
+                            <BeginStoryboard>
+                                <Storyboard RepeatBehavior="Forever">
+                                    <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                                     From="0" To="360" Duration="0:0:1"/>
+                                </Storyboard>
+                            </BeginStoryboard>
+                        </EventTrigger>
+                    </Border.Triggers>
+                    <Ellipse Stroke="White" StrokeThickness="4" StrokeDashArray="3,2" Opacity="0.8"/>
+                </Border>
+                <TextBlock Text="{Binding LoadingMessage}" 
                            Foreground="White" 
                            FontSize="16"
                            HorizontalAlignment="Center"/>
+                <TextBlock Text="{Binding LoadingStats}" 
+                           Foreground="White" 
+                           FontSize="10"
+                           Opacity="0.7"
+                           Margin="0,8,0,0"
+                           HorizontalAlignment="Center"
+                           Visibility="{Binding LoadingStats, Converter={StaticResource StringToVisibilityConverter}}"/>
             </StackPanel>
         </Border>
         

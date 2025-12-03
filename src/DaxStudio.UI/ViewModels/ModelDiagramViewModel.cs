@@ -209,6 +209,26 @@ namespace DaxStudio.UI.ViewModels
             set { _isLoading = value; NotifyOfPropertyChange(); }
         }
 
+        private string _loadingMessage = "Loading diagram...";
+        /// <summary>
+        /// Message shown during loading with progress info.
+        /// </summary>
+        public string LoadingMessage
+        {
+            get => _loadingMessage;
+            set { _loadingMessage = value; NotifyOfPropertyChange(); }
+        }
+
+        private string _loadingStats = string.Empty;
+        /// <summary>
+        /// Statistics about the last load operation (timing info).
+        /// </summary>
+        public string LoadingStats
+        {
+            get => _loadingStats;
+            set { _loadingStats = value; NotifyOfPropertyChange(); }
+        }
+
         private double _canvasWidth = 800;
         public double CanvasWidth
         {
@@ -277,7 +297,7 @@ namespace DaxStudio.UI.ViewModels
                 NotifyOfPropertyChange();
                 if (_model != null)
                 {
-                    LoadFromModel(_model);
+                    LoadFromModel(_model, forceReload: true);
                 }
             }
         }
@@ -599,11 +619,650 @@ namespace DaxStudio.UI.ViewModels
         /// <summary>
         /// Loads the diagram from an ADOTabularModel.
         /// </summary>
-        public void LoadFromModel(ADOTabularModel model)
+        /// <param name="model">The model to load.</param>
+        /// <param name="forceReload">If true, bypasses duplicate load prevention.</param>
+        public void LoadFromModel(ADOTabularModel model, bool forceReload = false)
         {
             if (model == null) return;
+            
+            // Prevent duplicate loads while already loading
+            if (IsLoading) return;
+            
+            // Prevent reloading the same model (unless explicitly requested)
+            if (!forceReload && _model == model && Tables.Count > 0) return;
 
+            // Set loading flag BEFORE starting async work to prevent duplicate calls
             IsLoading = true;
+
+            // For large models, load asynchronously
+            var tableCount = model.Tables.Count(t => ShowHiddenObjects || t.IsVisible);
+            if (tableCount > 20)
+            {
+                // Run async loading on background thread for large models
+                _ = LoadFromModelAsync(model);
+            }
+            else
+            {
+                // Small models load synchronously
+                LoadFromModelSync(model);
+            }
+        }
+
+        /// <summary>
+        /// Asynchronously loads the diagram from an ADOTabularModel with progress updates.
+        /// Used for large models (>20 tables) to keep UI responsive.
+        /// </summary>
+        private async Task LoadFromModelAsync(ADOTabularModel model)
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var stageStopwatch = new System.Diagnostics.Stopwatch();
+
+            // IsLoading is already set by LoadFromModel() before calling this method
+            LoadingMessage = "Initializing...";
+            
+            // Allow UI to render the loading indicator before starting work
+            await Task.Delay(50);
+
+            try
+            {
+                _model = model;
+                _currentModelKey = GenerateModelKey(model);
+
+                // Stage 1: Clear existing data (must be on UI thread)
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    Tables.Clear();
+                    Relationships.Clear();
+                });
+
+                // Stage 2: Materialize all model data on UI thread first (ADOTabular may log during lazy loading)
+                stageStopwatch.Start();
+                LoadingMessage = "Reading model metadata...";
+                
+                var visibleTables = model.Tables
+                    .Where(t => ShowHiddenObjects || t.IsVisible)
+                    .ToList();
+                var totalTables = visibleTables.Count;
+
+                // Pre-load all relationship data on UI thread to avoid logging issues on background thread
+                // Also pre-extract all string values to avoid lazy loading on background thread
+                var allRelationships = new List<(ADOTabularTable Table, List<ADOTabularRelationship> Relationships)>();
+                var relationshipData = new List<(ADOTabularRelationship Rel, string FromTableName, string FromColumn, string ToTableName, string ToColumn)>();
+                
+                foreach (var table in model.Tables)
+                {
+                    // Access relationships on UI thread to trigger any lazy loading
+                    var rels = table.Relationships.ToList();
+                    allRelationships.Add((table, rels));
+                    
+                    // Pre-extract string values for fast background processing
+                    foreach (var rel in rels)
+                    {
+                        relationshipData.Add((
+                            rel,
+                            rel.FromTable?.Name ?? "",
+                            rel.FromColumn ?? "",
+                            rel.ToTable?.Name ?? "",
+                            rel.ToColumn ?? ""
+                        ));
+                    }
+                }
+                
+                var metadataTime = stageStopwatch.ElapsedMilliseconds;
+
+                // Capture values needed for background work
+                var showHidden = ShowHiddenObjects;
+                var metadataProvider = _metadataProvider;
+                var options = _options;
+                var sortKeyColumnsFirst = _sortKeyColumnsFirst;
+
+                // Stage 3: Create table VMs (synchronously - faster than async overhead)
+                stageStopwatch.Restart();
+                LoadingMessage = $"Creating {totalTables} table views...";
+                await Task.Yield(); // Allow UI to render progress
+                
+                // For large models (>50 tables), start with tables collapsed to improve rendering performance
+                bool startCollapsed = totalTables > 50;
+                
+                var tableVms = new List<ModelDiagramTableViewModel>(totalTables);
+                for (int i = 0; i < visibleTables.Count; i++)
+                {
+                    var table = visibleTables[i];
+                    var tableVm = new ModelDiagramTableViewModel(table, showHidden, metadataProvider, options, sortKeyColumnsFirst);
+                    if (startCollapsed)
+                    {
+                        tableVm.IsCollapsed = true;
+                    }
+                    tableVms.Add(tableVm);
+                }
+
+                var tablesTime = stageStopwatch.ElapsedMilliseconds;
+
+                // Add all tables to collection - suppress notifications during bulk add
+                // WPF rendering happens after this method completes
+                stageStopwatch.Restart();
+                LoadingMessage = $"Adding {tableVms.Count} tables to diagram...";
+                await Task.Yield();
+                
+                Tables.IsNotifying = false;
+                try
+                {
+                    Tables.AddRange(tableVms);
+                }
+                finally
+                {
+                    Tables.IsNotifying = true;
+                    Tables.Refresh();
+                }
+                
+                var addTablesTime = stageStopwatch.ElapsedMilliseconds;
+
+                // Stage 4: Create relationships - fast enough to do on UI thread
+                stageStopwatch.Restart();
+                LoadingMessage = $"Processing {relationshipData.Count} relationships...";
+                await Task.Yield(); // Allow UI to render progress
+
+                // Build dictionaries for O(1) lookups
+                var tableDict = tableVms.ToDictionary(t => t.TableName, StringComparer.OrdinalIgnoreCase);
+                var columnDicts = new Dictionary<string, Dictionary<string, ModelDiagramColumnViewModel>>(StringComparer.OrdinalIgnoreCase);
+                foreach (var tableVm in tableVms)
+                {
+                    columnDicts[tableVm.TableName] = tableVm.Columns.ToDictionary(c => c.ColumnName, StringComparer.OrdinalIgnoreCase);
+                }
+
+                var relationshipVms = new List<ModelDiagramRelationshipViewModel>(relationshipData.Count / 2);
+                var processedRelationships = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var (rel, fromTableName, fromColumn, toTableName, toColumn) in relationshipData)
+                {
+                    var relKey = $"{fromTableName}|{fromColumn}|{toTableName}|{toColumn}";
+                    if (processedRelationships.Contains(relKey)) continue;
+                    processedRelationships.Add(relKey);
+
+                    tableDict.TryGetValue(fromTableName, out var fromTableVm);
+                    tableDict.TryGetValue(toTableName, out var toTableVm);
+
+                    if (fromTableVm != null && toTableVm != null)
+                    {
+                        var relVm = new ModelDiagramRelationshipViewModel(rel, fromTableVm, toTableVm);
+                        relationshipVms.Add(relVm);
+
+                        if (columnDicts.TryGetValue(fromTableName, out var fromColDict) &&
+                            fromColDict.TryGetValue(fromColumn, out var fromCol))
+                        {
+                            fromCol.IsRelationshipColumn = true;
+                        }
+                        if (columnDicts.TryGetValue(toTableName, out var toColDict) &&
+                            toColDict.TryGetValue(toColumn, out var toCol))
+                        {
+                            toCol.IsRelationshipColumn = true;
+                        }
+                    }
+                }
+
+                var relationshipsTime = stageStopwatch.ElapsedMilliseconds;
+
+                // Add relationships to collection
+                stageStopwatch.Restart();
+                LoadingMessage = "Adding relationships to diagram...";
+                
+                Relationships.IsNotifying = false;
+                try
+                {
+                    Relationships.AddRange(relationshipVms);
+                }
+                finally
+                {
+                    Relationships.IsNotifying = true;
+                    Relationships.Refresh();
+                }
+                
+                var addRelsTime = stageStopwatch.ElapsedMilliseconds;
+
+                // Re-sort columns if needed (now that IsRelationshipColumn is set)
+                // DISABLED FOR TESTING - uncomment to re-enable
+                stageStopwatch.Restart();
+                //if (sortKeyColumnsFirst)
+                //{
+                //    foreach (var table in Tables)
+                //    {
+                //        table.UpdateColumnSort(true);
+                //    }
+                //}
+                var resortTime = stageStopwatch.ElapsedMilliseconds;
+
+                // Stage 5: Layout
+                stageStopwatch.Restart();
+                LoadingMessage = $"Calculating layout for {tableVms.Count} tables...";
+                await Task.Yield(); // Allow UI to render progress
+
+                // Try to load saved layout first
+                // Pass startCollapsed to ensure we don't override the collapsed state for large models
+                bool layoutLoaded = TryLoadSavedLayout(preserveCollapsedState: startCollapsed);
+
+                const int LargeModelThreshold = 50;
+
+                if (!layoutLoaded)
+                {
+                    if (tableVms.Count <= LargeModelThreshold)
+                    {
+                        // For smaller models, use Sugiyama algorithm (better hierarchy)
+                        LayoutDiagramSugiyama();
+                    }
+                    else
+                    {
+                        // For larger models, use cluster-based algorithm (more compact)
+                        var layoutData = CalculateLayoutPositions(tableVms, allRelationships);
+                        ApplyLayoutPositions(layoutData);
+                        UpdateAllRelationships();
+                    }
+                }
+
+                var layoutTime = stageStopwatch.ElapsedMilliseconds;
+
+                stopwatch.Stop();
+                var totalTime = stopwatch.ElapsedMilliseconds;
+
+                // Update stats for display - comprehensive breakdown
+                LoadingStats = $"Loaded in {totalTime:N0}ms (Meta:{metadataTime}ms, Create:{tablesTime}ms, Add:{addTablesTime}ms, Rel:{relationshipsTime}ms, AddRel:{addRelsTime}ms, Sort:{resortTime}ms, Layout:{layoutTime}ms)";
+
+                // Capture values for logging on UI thread
+                var tableCount = Tables.Count;
+                var relCount = Relationships.Count;
+
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    // Log timing info on UI thread (Serilog sink uses IoC which requires UI thread)
+                    Log.Information("{class} {method} Loaded {tables} tables, {relationships} relationships in {time}ms " +
+                        "(Metadata:{metaTime}ms, CreateTables:{tablesTime}ms, AddTables:{addTablesTime}ms, " +
+                        "CreateRels:{relTime}ms, AddRels:{addRelsTime}ms, Resort:{resortTime}ms, Layout:{layoutTime}ms)",
+                        nameof(ModelDiagramViewModel), nameof(LoadFromModelAsync),
+                        tableCount, relCount, totalTime, 
+                        metadataTime, tablesTime, addTablesTime, 
+                        relationshipsTime, addRelsTime, resortTime, layoutTime);
+
+                    NotifyOfPropertyChange(nameof(SummaryText));
+                    NotifyOfPropertyChange(nameof(HasData));
+                    NotifyOfPropertyChange(nameof(NoData));
+                });
+            }
+            catch (Exception ex)
+            {
+                // Log on UI thread
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    Log.Error(ex, "{class} {method} {message}", nameof(ModelDiagramViewModel), nameof(LoadFromModelAsync), ex.Message);
+                });
+            }
+            finally
+            {
+                // Use low priority to set IsLoading=false AFTER WPF finishes rendering
+                // This keeps the loading indicator visible during the rendering phase
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    IsLoading = false;
+                    LoadingMessage = "Loading diagram...";
+                }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            }
+        }
+
+        /// <summary>
+        /// Calculates layout positions using ViewModels only (no ADOTabular objects needed).
+        /// Used by LayoutDiagram() when recalculating layout from existing data.
+        /// </summary>
+        private Dictionary<string, (double X, double Y, double Width)> CalculateLayoutPositionsFromViewModels()
+        {
+            var positions = new Dictionary<string, (double X, double Y, double Width)>();
+            var tableVms = Tables.ToList();
+            
+            if (tableVms.Count == 0) return positions;
+
+            const double tableWidth = 200;
+            const double tableHeight = 180;
+            const double horizontalSpacing = 80;
+            const double verticalSpacing = 100;
+            const double padding = 50;
+            const double clusterGap = 150;
+
+            // Build relationship graph from Relationships ViewModels
+            var tableSet = new HashSet<string>(tableVms.Select(t => t.TableName), StringComparer.OrdinalIgnoreCase);
+            var neighbors = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            var tableVmDict = tableVms.ToDictionary(t => t.TableName, StringComparer.OrdinalIgnoreCase);
+            
+            foreach (var table in tableVms)
+            {
+                neighbors[table.TableName] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            // Build neighbor relationships from Relationships collection
+            foreach (var rel in Relationships)
+            {
+                var fromTable = rel.FromTable;
+                var toTable = rel.ToTable;
+                
+                if (string.IsNullOrEmpty(fromTable) || string.IsNullOrEmpty(toTable)) continue;
+                
+                if (tableSet.Contains(fromTable) && tableSet.Contains(toTable))
+                {
+                    neighbors[fromTable].Add(toTable);
+                    neighbors[toTable].Add(fromTable);
+                }
+            }
+
+            // Find connected components using BFS
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var clusters = new List<List<ModelDiagramTableViewModel>>();
+            
+            foreach (var table in tableVms)
+            {
+                if (visited.Contains(table.TableName)) continue;
+                
+                var cluster = new List<ModelDiagramTableViewModel>();
+                var queue = new Queue<string>();
+                queue.Enqueue(table.TableName);
+                visited.Add(table.TableName);
+                
+                while (queue.Count > 0)
+                {
+                    var current = queue.Dequeue();
+                    if (tableVmDict.TryGetValue(current, out var tableVm))
+                    {
+                        cluster.Add(tableVm);
+                    }
+                    
+                    foreach (var neighbor in neighbors[current])
+                    {
+                        if (!visited.Contains(neighbor))
+                        {
+                            visited.Add(neighbor);
+                            queue.Enqueue(neighbor);
+                        }
+                    }
+                }
+                
+                clusters.Add(cluster);
+            }
+
+            // Sort clusters by size (largest first)
+            clusters = clusters.OrderByDescending(c => c.Count).ToList();
+
+            // Calculate target aspect ratio
+            int totalTables = tableVms.Count;
+            int targetCols = (int)Math.Ceiling(Math.Sqrt(totalTables * 1.5));
+            targetCols = Math.Max(8, Math.Min(20, targetCols));
+
+            double currentX = padding;
+            double currentY = padding;
+            double rowMaxHeight = 0;
+
+            foreach (var cluster in clusters)
+            {
+                int clusterSize = cluster.Count;
+                int clusterCols, clusterRows;
+                
+                if (clusterSize <= 3)
+                {
+                    clusterCols = clusterSize;
+                    clusterRows = 1;
+                }
+                else if (clusterSize <= 12)
+                {
+                    clusterCols = (int)Math.Ceiling(Math.Sqrt(clusterSize));
+                    clusterRows = (int)Math.Ceiling((double)clusterSize / clusterCols);
+                }
+                else
+                {
+                    clusterCols = Math.Min(6, (int)Math.Ceiling(Math.Sqrt(clusterSize)));
+                    clusterRows = (int)Math.Ceiling((double)clusterSize / clusterCols);
+                }
+
+                double clusterWidth = clusterCols * (tableWidth + horizontalSpacing) - horizontalSpacing;
+                double clusterHeight = clusterRows * (tableHeight + verticalSpacing) - verticalSpacing;
+
+                if (currentX + clusterWidth > targetCols * (tableWidth + horizontalSpacing) && currentX > padding)
+                {
+                    currentX = padding;
+                    currentY += rowMaxHeight + clusterGap;
+                    rowMaxHeight = 0;
+                }
+
+                int col = 0;
+                int row = 0;
+                
+                var sortedCluster = cluster
+                    .OrderByDescending(t => neighbors[t.TableName].Count)
+                    .ThenBy(t => t.TableName)
+                    .ToList();
+
+                foreach (var tableVm in sortedCluster)
+                {
+                    double x = currentX + col * (tableWidth + horizontalSpacing);
+                    double y = currentY + row * (tableHeight + verticalSpacing);
+                    
+                    positions[tableVm.TableName] = (x, y, tableWidth);
+
+                    col++;
+                    if (col >= clusterCols)
+                    {
+                        col = 0;
+                        row++;
+                    }
+                }
+
+                currentX += clusterWidth + clusterGap;
+                rowMaxHeight = Math.Max(rowMaxHeight, clusterHeight);
+            }
+
+            return positions;
+        }
+
+        /// <summary>
+        /// Calculates layout positions on a background thread without touching UI.
+        /// Uses a relationship-aware layout that groups connected tables into clusters.
+        /// Returns a dictionary of table name to (X, Y, Width) positions.
+        /// </summary>
+        private Dictionary<string, (double X, double Y, double Width)> CalculateLayoutPositions(
+            List<ModelDiagramTableViewModel> tableVms,
+            List<(ADOTabularTable Table, List<ADOTabularRelationship> Relationships)> allRelationships)
+        {
+            var positions = new Dictionary<string, (double X, double Y, double Width)>();
+            
+            if (tableVms.Count == 0) return positions;
+
+            const double tableWidth = 200;
+            const double tableHeight = 180;
+            const double horizontalSpacing = 80;
+            const double verticalSpacing = 100;
+            const double padding = 50;
+            const double clusterGap = 150; // Extra gap between clusters
+
+            // Build relationship graph from the pre-loaded relationship data
+            var tableSet = new HashSet<string>(tableVms.Select(t => t.TableName), StringComparer.OrdinalIgnoreCase);
+            var neighbors = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            var tableVmDict = tableVms.ToDictionary(t => t.TableName, StringComparer.OrdinalIgnoreCase);
+            
+            foreach (var table in tableVms)
+            {
+                neighbors[table.TableName] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            // Build neighbor relationships from pre-loaded relationship data
+            var processedRels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (table, relationships) in allRelationships)
+            {
+                foreach (var rel in relationships)
+                {
+                    var fromTable = rel.FromTable?.Name;
+                    var toTable = rel.ToTable?.Name;
+                    
+                    if (string.IsNullOrEmpty(fromTable) || string.IsNullOrEmpty(toTable)) continue;
+                    
+                    var relKey = $"{fromTable}|{toTable}";
+                    if (processedRels.Contains(relKey)) continue;
+                    processedRels.Add(relKey);
+                    processedRels.Add($"{toTable}|{fromTable}");
+                    
+                    if (tableSet.Contains(fromTable) && tableSet.Contains(toTable))
+                    {
+                        neighbors[fromTable].Add(toTable);
+                        neighbors[toTable].Add(fromTable);
+                    }
+                }
+            }
+
+            // Find connected components using BFS
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var clusters = new List<List<ModelDiagramTableViewModel>>();
+            
+            foreach (var table in tableVms)
+            {
+                if (visited.Contains(table.TableName)) continue;
+                
+                // BFS to find all tables in this connected component
+                var cluster = new List<ModelDiagramTableViewModel>();
+                var queue = new Queue<string>();
+                queue.Enqueue(table.TableName);
+                visited.Add(table.TableName);
+                
+                while (queue.Count > 0)
+                {
+                    var current = queue.Dequeue();
+                    if (tableVmDict.TryGetValue(current, out var tableVm))
+                    {
+                        cluster.Add(tableVm);
+                    }
+                    
+                    foreach (var neighbor in neighbors[current])
+                    {
+                        if (!visited.Contains(neighbor))
+                        {
+                            visited.Add(neighbor);
+                            queue.Enqueue(neighbor);
+                        }
+                    }
+                }
+                
+                clusters.Add(cluster);
+            }
+
+            // Sort clusters by size (largest first) to place important groups prominently
+            clusters = clusters.OrderByDescending(c => c.Count).ToList();
+
+            // Calculate target aspect ratio - aim for something reasonably square
+            int totalTables = tableVms.Count;
+            int targetCols = (int)Math.Ceiling(Math.Sqrt(totalTables * 1.5)); // Slightly wider than square
+            targetCols = Math.Max(8, Math.Min(20, targetCols)); // Between 8 and 20 columns
+
+            double currentX = padding;
+            double currentY = padding;
+            double rowMaxHeight = 0;
+            double maxX = 0;
+
+            foreach (var cluster in clusters)
+            {
+                // Calculate cluster dimensions
+                int clusterSize = cluster.Count;
+                int clusterCols, clusterRows;
+                
+                if (clusterSize <= 3)
+                {
+                    // Small clusters: single row
+                    clusterCols = clusterSize;
+                    clusterRows = 1;
+                }
+                else if (clusterSize <= 12)
+                {
+                    // Medium clusters: roughly square
+                    clusterCols = (int)Math.Ceiling(Math.Sqrt(clusterSize));
+                    clusterRows = (int)Math.Ceiling((double)clusterSize / clusterCols);
+                }
+                else
+                {
+                    // Large clusters: limit width, allow more rows
+                    clusterCols = Math.Min(6, (int)Math.Ceiling(Math.Sqrt(clusterSize)));
+                    clusterRows = (int)Math.Ceiling((double)clusterSize / clusterCols);
+                }
+
+                double clusterWidth = clusterCols * (tableWidth + horizontalSpacing) - horizontalSpacing;
+                double clusterHeight = clusterRows * (tableHeight + verticalSpacing) - verticalSpacing;
+
+                // Check if this cluster fits in the current row
+                if (currentX + clusterWidth > targetCols * (tableWidth + horizontalSpacing) && currentX > padding)
+                {
+                    // Move to next row
+                    currentX = padding;
+                    currentY += rowMaxHeight + clusterGap;
+                    rowMaxHeight = 0;
+                }
+
+                // Place tables within this cluster
+                int col = 0;
+                int row = 0;
+                
+                // Sort tables within cluster: more connected tables first (central position)
+                var sortedCluster = cluster
+                    .OrderByDescending(t => neighbors[t.TableName].Count)
+                    .ThenBy(t => t.TableName)
+                    .ToList();
+
+                foreach (var tableVm in sortedCluster)
+                {
+                    double x = currentX + col * (tableWidth + horizontalSpacing);
+                    double y = currentY + row * (tableHeight + verticalSpacing);
+                    
+                    positions[tableVm.TableName] = (x, y, tableWidth);
+                    maxX = Math.Max(maxX, x + tableWidth);
+
+                    col++;
+                    if (col >= clusterCols)
+                    {
+                        col = 0;
+                        row++;
+                    }
+                }
+
+                // Update position for next cluster
+                currentX += clusterWidth + clusterGap;
+                rowMaxHeight = Math.Max(rowMaxHeight, clusterHeight);
+            }
+
+            return positions;
+        }
+
+        /// <summary>
+        /// Applies pre-calculated layout positions to tables.
+        /// Must be called on UI thread.
+        /// </summary>
+        private void ApplyLayoutPositions(Dictionary<string, (double X, double Y, double Width)> positions)
+        {
+            double maxX = 0, maxY = 0;
+
+            foreach (var table in Tables)
+            {
+                if (positions.TryGetValue(table.TableName, out var pos))
+                {
+                    table.X = pos.X;
+                    table.Y = pos.Y;
+                    table.Width = pos.Width;
+
+                    maxX = Math.Max(maxX, pos.X + pos.Width);
+                    maxY = Math.Max(maxY, pos.Y + 180); // Approximate height
+                }
+            }
+
+            CanvasWidth = Math.Max(800, maxX + 50);
+            CanvasHeight = Math.Max(600, maxY + 50);
+        }
+
+        /// <summary>
+        /// Synchronously loads the diagram from an ADOTabularModel.
+        /// Used for small models (<=20 tables) where async overhead isn't needed.
+        /// </summary>
+        private void LoadFromModelSync(ADOTabularModel model)
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            // IsLoading is already set by LoadFromModel() before calling this method
 
             try
             {
@@ -643,7 +1302,7 @@ namespace DaxStudio.UI.ViewModels
                         {
                             var relVm = new ModelDiagramRelationshipViewModel(rel, fromTableVm, toTableVm);
                             Relationships.Add(relVm);
-                            
+
                             // Mark columns as relationship columns
                             var fromCol = fromTableVm.Columns.FirstOrDefault(c => c.ColumnName == rel.FromColumn);
                             var toCol = toTableVm.Columns.FirstOrDefault(c => c.ColumnName == rel.ToColumn);
@@ -659,13 +1318,20 @@ namespace DaxStudio.UI.ViewModels
                     LayoutDiagram();
                 }
 
+                stopwatch.Stop();
+                Log.Information("{class} {method} Loaded {tables} tables, {relationships} relationships in {time}ms",
+                    nameof(ModelDiagramViewModel), nameof(LoadFromModelSync),
+                    Tables.Count, Relationships.Count, stopwatch.ElapsedMilliseconds);
+
+                LoadingStats = $"Loaded in {stopwatch.ElapsedMilliseconds}ms";
+
                 NotifyOfPropertyChange(nameof(SummaryText));
                 NotifyOfPropertyChange(nameof(HasData));
                 NotifyOfPropertyChange(nameof(NoData));
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "{class} {method} {message}", nameof(ModelDiagramViewModel), nameof(LoadFromModel), ex.Message);
+                Log.Error(ex, "{class} {method} {message}", nameof(ModelDiagramViewModel), nameof(LoadFromModelSync), ex.Message);
             }
             finally
             {
@@ -686,16 +1352,34 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
-        /// Layouts the diagram using a simple grid-based algorithm.
-        /// Tables connected by relationships are placed closer together.
-        /// Fact tables (many relationships, on the "many" side) go at the bottom.
-        /// Dimension tables (fewer relationships, on the "one" side) go at the top.
-        /// Uses Sugiyama-style layered graph drawing algorithm.
+        /// Layouts the diagram using the appropriate algorithm based on model size.
+        /// - For smaller models (≤50 tables): Sugiyama-style layered algorithm (better hierarchy visualization)
+        /// - For larger models (>50 tables): Cluster-based compact algorithm (better space utilization)
         /// </summary>
         private void LayoutDiagram()
         {
             if (Tables.Count == 0) return;
 
+            const int LargeModelThreshold = 50;
+
+            if (Tables.Count <= LargeModelThreshold)
+            {
+                // Use Sugiyama-style algorithm for smaller models - better hierarchy
+                LayoutDiagramSugiyama();
+            }
+            else
+            {
+                // Use cluster-based algorithm for larger models - more compact
+                LayoutDiagramClustered();
+            }
+        }
+
+        /// <summary>
+        /// Layouts the diagram using Sugiyama-style layered algorithm.
+        /// Better for smaller models where relationship hierarchy is important.
+        /// </summary>
+        private void LayoutDiagramSugiyama()
+        {
             const double tableWidth = 200;
             const double tableHeight = 180;
             const double horizontalSpacing = 100;
@@ -716,6 +1400,25 @@ namespace DaxStudio.UI.ViewModels
             var maxY = Tables.Any() ? Tables.Max(t => t.Y + t.Height) : 100;
             CanvasWidth = Math.Max(100, maxX + padding);
             CanvasHeight = Math.Max(100, maxY + padding);
+
+            // Update relationship line positions
+            foreach (var rel in Relationships)
+            {
+                rel.UpdatePath();
+            }
+        }
+
+        /// <summary>
+        /// Layouts the diagram using cluster-based algorithm.
+        /// Better for larger models where compact layout is more important.
+        /// </summary>
+        private void LayoutDiagramClustered()
+        {
+            // Calculate positions using the cluster-based algorithm
+            var positions = CalculateLayoutPositionsFromViewModels();
+            
+            // Apply positions
+            ApplyLayoutPositions(positions);
 
             // Update relationship line positions
             foreach (var rel in Relationships)
@@ -2115,7 +2818,7 @@ namespace DaxStudio.UI.ViewModels
         /// Tries to load a saved layout for the current model.
         /// </summary>
         /// <returns>True if layout was loaded, false otherwise.</returns>
-        private bool TryLoadSavedLayout()
+        private bool TryLoadSavedLayout(bool preserveCollapsedState = false)
         {
             if (string.IsNullOrEmpty(_currentModelKey)) return false;
 
@@ -2133,11 +2836,22 @@ namespace DaxStudio.UI.ViewModels
                         table.X = pos.X;
                         table.Y = pos.Y;
                         table.Width = pos.Width > 0 ? pos.Width : 200;
-                        table.Height = pos.Height > 0 ? pos.Height : 180;
-                        // Use SetCollapsedState to properly restore collapsed state with expanded height
-                        if (pos.IsCollapsed)
+                        
+                        // If preserveCollapsedState is true (large model), keep tables collapsed
+                        // Otherwise, restore from saved layout
+                        if (preserveCollapsedState)
                         {
-                            table.SetCollapsedState(true, pos.ExpandedHeight > 0 ? pos.ExpandedHeight : pos.Height);
+                            // Keep current collapsed state, just update position
+                            // Height was already set when IsCollapsed was set
+                        }
+                        else
+                        {
+                            table.Height = pos.Height > 0 ? pos.Height : 180;
+                            // Use SetCollapsedState to properly restore collapsed state with expanded height
+                            if (pos.IsCollapsed)
+                            {
+                                table.SetCollapsedState(true, pos.ExpandedHeight > 0 ? pos.ExpandedHeight : pos.Height);
+                            }
                         }
                         anyApplied = true;
                     }
@@ -2268,6 +2982,8 @@ namespace DaxStudio.UI.ViewModels
 
         /// <summary>
         /// Gets columns sorted based on the current sort setting.
+        /// Note: IsRelationshipColumn is NOT set here during initial load - it's set later
+        /// by the relationship processing loop for much better performance.
         /// </summary>
         private IEnumerable<ModelDiagramColumnViewModel> GetSortedColumns()
         {
@@ -2277,9 +2993,10 @@ namespace DaxStudio.UI.ViewModels
             IEnumerable<ADOTabularColumn> sorted;
             if (_sortKeyColumnsFirst)
             {
+                // During initial load, we can't sort by relationship columns yet (not determined)
+                // After relationships are processed, UpdateColumnSort can be called to re-sort
                 sorted = filtered
                     .OrderBy(c => c.ObjectType == ADOTabularObjectType.Column ? 0 : 1) // Columns first, then measures
-                    .ThenByDescending(c => IsRelationshipColumn(c.Name)) // Related columns (used in relationships) first
                     .ThenBy(c => c.Caption);
             }
             else
@@ -2289,17 +3006,13 @@ namespace DaxStudio.UI.ViewModels
                     .ThenBy(c => c.Caption);
             }
 
-            // Create ViewModels and set IsRelationshipColumn
-            return sorted.Select(c => 
-            {
-                var vm = new ModelDiagramColumnViewModel(c, _metadataProvider, _options);
-                vm.IsRelationshipColumn = IsRelationshipColumn(c.Name);
-                return vm;
-            });
+            // Create ViewModels - IsRelationshipColumn will be set later by relationship processing
+            return sorted.Select(c => new ModelDiagramColumnViewModel(c, _metadataProvider, _options));
         }
 
         /// <summary>
         /// Checks if a column is used in a relationship (foreign key or referenced key).
+        /// WARNING: This is expensive - iterates all relationships. Use sparingly.
         /// </summary>
         private bool IsRelationshipColumn(string columnName)
         {
@@ -2535,7 +3248,7 @@ namespace DaxStudio.UI.ViewModels
 
         private bool _isCollapsed;
         private double _expandedHeight;
-        private const double HeaderHeight = 32; // Height for just the header
+        private const double CollapsedHeaderHeight = 40; // Height for just the header when collapsed
         private const double KeyColumnRowHeight = 18; // Height per key column row
 
         /// <summary>
@@ -2544,8 +3257,8 @@ namespace DaxStudio.UI.ViewModels
         private double CalculateCollapsedHeight()
         {
             int keyCount = Columns.Count(c => c.IsKey);
-            if (keyCount == 0) return HeaderHeight;
-            return HeaderHeight + 6 + (keyCount * KeyColumnRowHeight); // 6 = padding
+            if (keyCount == 0) return CollapsedHeaderHeight;
+            return CollapsedHeaderHeight + 6 + (keyCount * KeyColumnRowHeight); // 6 = padding
         }
 
         public bool IsCollapsed
@@ -2647,6 +3360,7 @@ namespace DaxStudio.UI.ViewModels
         private readonly IGlobalOptions _options;
         private List<string> _sampleData;
         private bool _updatingSampleData;
+        private bool _sampleDataLoadFailed; // Prevent retrying on error
         private const int SAMPLE_ROWS = 10;
 
         public ModelDiagramColumnViewModel(ADOTabularColumn column, IMetadataProvider metadataProvider, IGlobalOptions options)
@@ -2776,8 +3490,8 @@ namespace DaxStudio.UI.ViewModels
         {
             get
             {
-                // Trigger sample data loading if enabled and not already loaded
-                if (ShowSampleData && !HasSampleData && !_updatingSampleData)
+                // Trigger sample data loading if enabled and not already loaded/failed
+                if (ShowSampleData && !HasSampleData && !_updatingSampleData && !_sampleDataLoadFailed)
                 {
                     LoadSampleDataAsync();
                 }
@@ -2852,11 +3566,10 @@ namespace DaxStudio.UI.ViewModels
 
         /// <summary>
         /// Whether to show sample data in the tooltip (based on options).
+        /// For Model Diagram, we disable sample data loading to avoid performance issues
+        /// and errors with calculated columns. Users can see sample data in the metadata pane.
         /// </summary>
-        private bool ShowSampleData => _options?.ShowTooltipSampleData == true 
-                                     && !IsMeasure 
-                                     && !IsHierarchy
-                                     && _column.ObjectType == ADOTabularObjectType.Column;
+        private bool ShowSampleData => false; // Disabled for Model Diagram - too many columns to query
 
         /// <summary>
         /// Whether sample data has been loaded.
@@ -2870,7 +3583,9 @@ namespace DaxStudio.UI.ViewModels
         /// </summary>
         private async void LoadSampleDataAsync()
         {
-            if (_metadataProvider == null || _updatingSampleData) return;
+            // Skip sample data for hierarchies and measures - they don't have queryable data
+            // Also skip if we already tried and failed (prevents retry loops)
+            if (_metadataProvider == null || _updatingSampleData || _sampleDataLoadFailed || IsHierarchy || IsMeasure) return;
             
             _updatingSampleData = true;
             
@@ -2885,8 +3600,10 @@ namespace DaxStudio.UI.ViewModels
             catch (Exception ex)
             {
                 // Log but don't crash - sample data is not critical
+                // Mark as failed to prevent retry loops on error columns
                 Log.Warning(ex, "Error loading sample data for column {ColumnName}", ColumnName);
                 _sampleData = new List<string>();
+                _sampleDataLoadFailed = true;
             }
             finally
             {
