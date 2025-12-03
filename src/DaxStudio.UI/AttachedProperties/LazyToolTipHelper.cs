@@ -1,6 +1,7 @@
 using System;
 using System.Windows;
 using System.Windows.Controls;
+using Serilog;
 
 namespace DaxStudio.UI.AttachedProperties
 {
@@ -12,6 +13,9 @@ namespace DaxStudio.UI.AttachedProperties
     /// </summary>
     public static class LazyToolTipHelper
     {
+        // Placeholder object to identify an uninitialized tooltip
+        private static readonly object TooltipPlaceholder = new object();
+
         #region LazyToolTipTemplate Attached Property
 
         public static readonly DependencyProperty LazyToolTipTemplateProperty =
@@ -41,9 +45,9 @@ namespace DaxStudio.UI.AttachedProperties
             {
                 if (e.NewValue is DataTemplate)
                 {
-                    // Initially set an empty tooltip placeholder to enable the ToolTipOpening event
+                    // Initially set a placeholder tooltip to enable the ToolTipOpening event
                     // The actual content will be created lazily when the tooltip opens
-                    element.ToolTip = string.Empty;
+                    element.ToolTip = TooltipPlaceholder;
 
                     // Subscribe to the opening event
                     element.ToolTipOpening += OnToolTipOpening;
@@ -65,22 +69,33 @@ namespace DaxStudio.UI.AttachedProperties
                 var template = GetLazyToolTipTemplate(element);
                 if (template != null)
                 {
-                    // Check if we already have a proper tooltip (not the placeholder)
-                    if (element.ToolTip is string)
+                    // Check if we have the placeholder (not yet initialized)
+                    if (ReferenceEquals(element.ToolTip, TooltipPlaceholder))
                     {
-                        // Create the tooltip content from the template on demand
-                        var content = template.LoadContent() as FrameworkElement;
-                        if (content != null)
+                        try
                         {
-                            // Set the DataContext to the element's DataContext
-                            content.DataContext = element.DataContext;
-
-                            // Create and set the tooltip
-                            var tooltip = new ToolTip
+                            // Create the tooltip content from the template on demand
+                            var content = template.LoadContent() as FrameworkElement;
+                            if (content != null)
                             {
-                                Content = content
-                            };
-                            element.ToolTip = tooltip;
+                                // Set the DataContext to the element's DataContext
+                                content.DataContext = element.DataContext;
+
+                                // Create and set the tooltip
+                                var tooltip = new ToolTip
+                                {
+                                    Content = content
+                                };
+                                element.ToolTip = tooltip;
+                            }
+                            else
+                            {
+                                Log.Warning("LazyToolTipHelper: Template.LoadContent() did not return a FrameworkElement");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error(ex, "LazyToolTipHelper: Error loading tooltip template content");
                         }
                     }
                 }
@@ -98,7 +113,7 @@ namespace DaxStudio.UI.AttachedProperties
                 if (template != null)
                 {
                     // Reset to placeholder for next time
-                    element.ToolTip = string.Empty;
+                    element.ToolTip = TooltipPlaceholder;
                 }
             }
         }
