@@ -546,6 +546,41 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
+        /// Calculates parallel offsets for relationships between the same table pairs.
+        /// This prevents multiple relationships from overlapping by spacing them apart.
+        /// </summary>
+        private void CalculateParallelRelationshipOffsets()
+        {
+            const double ParallelGap = 30; // Gap between parallel relationship lines
+            
+            // Group relationships by table pair (order-independent)
+            var tablePairGroups = Relationships
+                .GroupBy(r => 
+                {
+                    // Create a consistent key regardless of direction
+                    var tables = new[] { r.FromTable, r.ToTable }.OrderBy(t => t, StringComparer.OrdinalIgnoreCase).ToArray();
+                    return $"{tables[0]}|{tables[1]}";
+                })
+                .Where(g => g.Count() > 1) // Only process groups with multiple relationships
+                .ToList();
+            
+            foreach (var group in tablePairGroups)
+            {
+                var rels = group.ToList();
+                int count = rels.Count;
+                
+                // Calculate offsets to center the group
+                // For 2 relationships: offsets are -10, +10
+                // For 3 relationships: offsets are -20, 0, +20
+                for (int i = 0; i < count; i++)
+                {
+                    double offset = (i - (count - 1) / 2.0) * ParallelGap;
+                    rels[i].ParallelOffset = offset;
+                }
+            }
+        }
+
+        /// <summary>
         /// Called when mouse enters a table. Highlights related tables and dims others.
         /// </summary>
         public void OnTableMouseEnter(ModelDiagramTableViewModel hoveredTable)
@@ -817,18 +852,24 @@ namespace DaxStudio.UI.ViewModels
                     Relationships.Refresh();
                 }
                 
+                // Calculate parallel offsets for relationships between the same table pairs
+                CalculateParallelRelationshipOffsets();
+                
                 var addRelsTime = stageStopwatch.ElapsedMilliseconds;
 
-                // Re-sort columns if needed (now that IsRelationshipColumn is set)
-                // DISABLED FOR TESTING - uncomment to re-enable
+                // Re-sort columns and recalculate collapsed heights now that IsRelationshipColumn is set
                 stageStopwatch.Restart();
-                //if (sortKeyColumnsFirst)
-                //{
-                //    foreach (var table in Tables)
-                //    {
-                //        table.UpdateColumnSort(true);
-                //    }
-                //}
+                foreach (var table in Tables)
+                {
+                    // Notify that KeyColumns may have changed (IsRelationshipColumn was just set)
+                    table.NotifyKeyColumnsChanged();
+                    
+                    // Recalculate collapsed height now that we know the key columns
+                    if (table.IsCollapsed)
+                    {
+                        table.RecalculateCollapsedHeight();
+                    }
+                }
                 var resortTime = stageStopwatch.ElapsedMilliseconds;
 
                 // Stage 5: Layout
@@ -1311,6 +1352,9 @@ namespace DaxStudio.UI.ViewModels
                         }
                     }
                 }
+
+                // Calculate parallel offsets for relationships between the same table pairs
+                CalculateParallelRelationshipOffsets();
 
                 // Try to load saved layout, otherwise use auto-layout
                 if (!TryLoadSavedLayout())
@@ -2256,12 +2300,13 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
-        /// Selects a relationship and highlights the connected tables.
+        /// Selects a relationship and highlights the connected tables and columns.
         /// </summary>
         public void SelectRelationship(ModelDiagramRelationshipViewModel relationship)
         {
-            // Clear table selection
+            // Clear table selection and column highlighting
             ClearSelection();
+            ClearColumnHighlighting();
             
             // Select the relationship
             SelectedRelationship = relationship;
@@ -2273,6 +2318,19 @@ namespace DaxStudio.UI.ViewModels
                 {
                     var isConnected = table.TableName == relationship.FromTable || table.TableName == relationship.ToTable;
                     table.IsDimmed = !isConnected;
+                    
+                    // Highlight the specific columns used in this relationship
+                    if (table.TableName == relationship.FromTable)
+                    {
+                        var col = FindColumnByName(table, relationship.FromColumn);
+                        if (col != null) col.IsHighlighted = true;
+                    }
+                    // Note: Don't use else - a self-join would have both columns in the same table
+                    if (table.TableName == relationship.ToTable)
+                    {
+                        var col = FindColumnByName(table, relationship.ToColumn);
+                        if (col != null) col.IsHighlighted = true;
+                    }
                 }
                 
                 // Highlight this relationship, dim others
@@ -2282,6 +2340,97 @@ namespace DaxStudio.UI.ViewModels
                     rel.IsDimmed = rel != relationship;
                 }
             }
+        }
+
+        /// <summary>
+        /// Clears highlighting from all columns.
+        /// </summary>
+        private void ClearColumnHighlighting()
+        {
+            foreach (var table in Tables)
+            {
+                foreach (var col in table.Columns)
+                {
+                    col.IsHighlighted = false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Finds a column in a table by name, trying multiple matching strategies.
+        /// Handles differences between internal names (with underscores) and display names (with spaces).
+        /// </summary>
+        private ModelDiagramColumnViewModel FindColumnByName(ModelDiagramTableViewModel table, string columnName)
+        {
+            if (table == null || string.IsNullOrEmpty(columnName)) return null;
+            
+            // Try exact match on ColumnName first
+            var col = table.Columns.FirstOrDefault(c => 
+                string.Equals(c.ColumnName, columnName, StringComparison.OrdinalIgnoreCase));
+            if (col != null) return col;
+            
+            // Try matching on Caption
+            col = table.Columns.FirstOrDefault(c => 
+                string.Equals(c.Caption, columnName, StringComparison.OrdinalIgnoreCase));
+            if (col != null) return col;
+            
+            // Try with underscores replaced by spaces (internal name -> display name)
+            var nameWithSpaces = columnName.Replace("_", " ");
+            col = table.Columns.FirstOrDefault(c => 
+                string.Equals(c.ColumnName, nameWithSpaces, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(c.Caption, nameWithSpaces, StringComparison.OrdinalIgnoreCase));
+            if (col != null) return col;
+            
+            // Try with spaces replaced by underscores (display name -> internal name)
+            var nameWithUnderscores = columnName.Replace(" ", "_");
+            col = table.Columns.FirstOrDefault(c => 
+                string.Equals(c.ColumnName, nameWithUnderscores, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(c.Caption, nameWithUnderscores, StringComparison.OrdinalIgnoreCase));
+            
+            return col;
+        }
+
+        /// <summary>
+        /// Highlights the columns involved in a relationship when hovering over it.
+        /// Does not select the relationship or dim other tables.
+        /// </summary>
+        public void HoverRelationship(ModelDiagramRelationshipViewModel relationship)
+        {
+            // Don't change hover highlighting if a relationship is already selected
+            if (SelectedRelationship != null) return;
+            
+            ClearColumnHighlighting();
+            
+            if (relationship != null)
+            {
+                // Highlight the specific columns used in this relationship
+                foreach (var table in Tables)
+                {
+                    if (table.TableName == relationship.FromTable)
+                    {
+                        var col = FindColumnByName(table, relationship.FromColumn);
+                        if (col != null) col.IsHighlighted = true;
+                    }
+                    // Note: Don't use else - a self-join would have both columns in the same table
+                    if (table.TableName == relationship.ToTable)
+                    {
+                        var col = FindColumnByName(table, relationship.ToColumn);
+                        if (col != null) col.IsHighlighted = true;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Clears column highlighting when mouse leaves a relationship.
+        /// Only clears if no relationship is selected.
+        /// </summary>
+        public void UnhoverRelationship()
+        {
+            // Don't clear highlighting if a relationship is selected
+            if (SelectedRelationship != null) return;
+            
+            ClearColumnHighlighting();
         }
 
         /// <summary>
@@ -2296,6 +2445,7 @@ namespace DaxStudio.UI.ViewModels
             SelectedTables.Clear();
             _selectedTable = null;
             SelectedRelationship = null; // Also clear relationship selection
+            ClearColumnHighlighting(); // Clear column highlighting
             NotifyOfPropertyChange(nameof(SelectedTable));
             NotifyOfPropertyChange(nameof(HasMultipleSelection));
             NotifyOfPropertyChange(nameof(CanHighlightPath));
@@ -3252,13 +3402,36 @@ namespace DaxStudio.UI.ViewModels
         private const double KeyColumnRowHeight = 18; // Height per key column row
 
         /// <summary>
-        /// Calculate collapsed height based on header + key columns.
+        /// Calculate collapsed height based on header + key columns + relationship columns.
         /// </summary>
         private double CalculateCollapsedHeight()
         {
-            int keyCount = Columns.Count(c => c.IsKey);
+            // Count key columns AND relationship columns (shown in collapsed view)
+            int keyCount = Columns.Count(c => c.IsKey || c.IsRelationshipColumn);
             if (keyCount == 0) return CollapsedHeaderHeight;
             return CollapsedHeaderHeight + 6 + (keyCount * KeyColumnRowHeight); // 6 = padding
+        }
+
+        /// <summary>
+        /// Recalculates the collapsed height after IsRelationshipColumn has been set.
+        /// Should be called after relationships are processed.
+        /// </summary>
+        public void RecalculateCollapsedHeight()
+        {
+            if (_isCollapsed)
+            {
+                Height = CalculateCollapsedHeight();
+            }
+        }
+
+        /// <summary>
+        /// Notifies that KeyColumns collection may have changed.
+        /// Should be called after IsRelationshipColumn has been set on columns.
+        /// </summary>
+        public void NotifyKeyColumnsChanged()
+        {
+            NotifyOfPropertyChange(nameof(KeyColumns));
+            NotifyOfPropertyChange(nameof(HasKeyColumns));
         }
 
         public bool IsCollapsed
@@ -3636,6 +3809,16 @@ namespace DaxStudio.UI.ViewModels
             get => _isSearchMatch;
             set { _isSearchMatch = value; NotifyOfPropertyChange(); }
         }
+
+        private bool _isHighlighted;
+        /// <summary>
+        /// Whether this column is highlighted (e.g., when its relationship is selected).
+        /// </summary>
+        public bool IsHighlighted
+        {
+            get => _isHighlighted;
+            set { _isHighlighted = value; NotifyOfPropertyChange(); }
+        }
     }
 
     /// <summary>
@@ -3788,6 +3971,17 @@ namespace DaxStudio.UI.ViewModels
         /// </summary>
         private bool _isPathInitialized;
 
+        /// <summary>
+        /// Offset for parallel relationships between the same table pair.
+        /// 0 = centered, negative = offset left/up, positive = offset right/down.
+        /// </summary>
+        private double _parallelOffset;
+        public double ParallelOffset
+        {
+            get => _parallelOffset;
+            set { _parallelOffset = value; NotifyOfPropertyChange(); NotifyOfPropertyChange(nameof(PathData)); }
+        }
+
         #endregion
 
         #region Line Path
@@ -3857,30 +4051,56 @@ namespace DaxStudio.UI.ViewModels
                 // Determine if this is a horizontal or vertical relationship
                 bool isVertical = (_startEdge == EdgeType.Top || _startEdge == EdgeType.Bottom);
                 
+                // Apply parallel offset perpendicular to the line direction
+                double offsetX = isVertical ? _parallelOffset : 0;
+                double offsetY = isVertical ? 0 : _parallelOffset;
+                
+                double startX = StartX + offsetX;
+                double startY = StartY + offsetY;
+                double endX = EndX + offsetX;
+                double endY = EndY + offsetY;
+                
                 if (isVertical)
                 {
                     // Vertical bezier curve (for top/bottom connections)
-                    double midY = (StartY + EndY) / 2;
+                    double midY = (startY + endY) / 2;
                     return string.Format(System.Globalization.CultureInfo.InvariantCulture,
                         "M {0},{1} C {2},{3} {4},{5} {6},{7}",
-                        StartX, StartY, StartX, midY, EndX, midY, EndX, EndY);
+                        startX, startY, startX, midY, endX, midY, endX, endY);
                 }
                 else
                 {
                     // Horizontal bezier curve (for left/right connections)
-                    double midX = (StartX + EndX) / 2;
+                    double midX = (startX + endX) / 2;
                     return string.Format(System.Globalization.CultureInfo.InvariantCulture,
                         "M {0},{1} C {2},{3} {4},{5} {6},{7}",
-                        StartX, StartY, midX, StartY, midX, EndY, EndX, EndY);
+                        startX, startY, midX, startY, midX, endY, endX, endY);
                 }
             }
         }
 
         /// <summary>
-        /// Label position (middle of the line).
+        /// Label position (middle of the line), accounting for parallel offset.
         /// </summary>
-        public double LabelX => (StartX + EndX) / 2;
-        public double LabelY => (StartY + EndY) / 2;
+        public double LabelX
+        {
+            get
+            {
+                bool isVertical = (_startEdge == EdgeType.Top || _startEdge == EdgeType.Bottom);
+                double offset = isVertical ? _parallelOffset : 0;
+                return (StartX + EndX) / 2 + offset;
+            }
+        }
+        
+        public double LabelY
+        {
+            get
+            {
+                bool isVertical = (_startEdge == EdgeType.Top || _startEdge == EdgeType.Bottom);
+                double offset = isVertical ? 0 : _parallelOffset;
+                return (StartY + EndY) / 2 + offset;
+            }
+        }
 
         /// <summary>
         /// Rotation angle for filter direction arrow pointing toward "From" table (where filter originates).
@@ -3910,13 +4130,16 @@ namespace DaxStudio.UI.ViewModels
         {
             get
             {
+                bool isVertical = (_startEdge == EdgeType.Top || _startEdge == EdgeType.Bottom);
+                double parallelOffsetX = isVertical ? _parallelOffset : 0;
+                
                 // Position based on which edge the line exits from
                 switch (_startEdge)
                 {
                     case EdgeType.Top:
                     case EdgeType.Bottom:
                         // Vertical edge - position to the right of the connection point
-                        return StartX + 4;
+                        return StartX + 4 + parallelOffsetX;
                     case EdgeType.Left:
                         // Left edge - position to the left
                         return StartX - 28;
@@ -3924,7 +4147,7 @@ namespace DaxStudio.UI.ViewModels
                         // Right edge - position to the right
                         return StartX + 6;
                     default:
-                        return StartX + 5;
+                        return StartX + 5 + parallelOffsetX;
                 }
             }
         }
@@ -3933,6 +4156,9 @@ namespace DaxStudio.UI.ViewModels
         {
             get
             {
+                bool isVertical = (_startEdge == EdgeType.Top || _startEdge == EdgeType.Bottom);
+                double parallelOffsetY = isVertical ? 0 : _parallelOffset;
+                
                 // Position based on which edge the line exits from
                 switch (_startEdge)
                 {
@@ -3945,9 +4171,9 @@ namespace DaxStudio.UI.ViewModels
                     case EdgeType.Left:
                     case EdgeType.Right:
                         // Horizontal edge - position above the line
-                        return StartY - 12;
+                        return StartY - 12 + parallelOffsetY;
                     default:
-                        return StartY - 12;
+                        return StartY - 12 + parallelOffsetY;
                 }
             }
         }
@@ -3959,13 +4185,16 @@ namespace DaxStudio.UI.ViewModels
         {
             get
             {
+                bool isVertical = (_endEdge == EdgeType.Top || _endEdge == EdgeType.Bottom);
+                double parallelOffsetX = isVertical ? _parallelOffset : 0;
+                
                 // Position based on which edge the line enters
                 switch (_endEdge)
                 {
                     case EdgeType.Top:
                     case EdgeType.Bottom:
                         // Vertical edge - position to the right of the connection point
-                        return EndX + 4;
+                        return EndX + 4 + parallelOffsetX;
                     case EdgeType.Left:
                         // Left edge - position to the left
                         return EndX - 28;
@@ -3973,7 +4202,7 @@ namespace DaxStudio.UI.ViewModels
                         // Right edge - position to the right
                         return EndX + 6;
                     default:
-                        return EndX + 5;
+                        return EndX + 5 + parallelOffsetX;
                 }
             }
         }
@@ -3982,6 +4211,9 @@ namespace DaxStudio.UI.ViewModels
         {
             get
             {
+                bool isVertical = (_endEdge == EdgeType.Top || _endEdge == EdgeType.Bottom);
+                double parallelOffsetY = isVertical ? 0 : _parallelOffset;
+                
                 // Position based on which edge the line enters
                 switch (_endEdge)
                 {
@@ -3994,9 +4226,9 @@ namespace DaxStudio.UI.ViewModels
                     case EdgeType.Left:
                     case EdgeType.Right:
                         // Horizontal edge - position above the line
-                        return EndY - 12;
+                        return EndY - 12 + parallelOffsetY;
                     default:
-                        return EndY - 12;
+                        return EndY - 12 + parallelOffsetY;
                 }
             }
         }

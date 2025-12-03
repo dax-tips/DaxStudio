@@ -316,12 +316,18 @@
                                                 <Border.Style>
                                                     <Style TargetType="Border" BasedOn="{StaticResource ColumnItemStyle}">
                                                         <Setter Property="Opacity" Value="1"/>
+                                                        <Setter Property="Background" Value="Transparent"/>
                                                         <Style.Triggers>
                                                             <DataTrigger Binding="{Binding IsSearchMatch}" Value="False">
                                                                 <Setter Property="Opacity" Value="0.4"/>
                                                             </DataTrigger>
                                                             <DataTrigger Binding="{Binding IsVisible}" Value="False">
                                                                 <Setter Property="Opacity" Value="0.6"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
+                                                                <Setter Property="Background" Value="#4000D7FF"/>
+                                                                <Setter Property="BorderBrush" Value="#00D7FF"/>
+                                                                <Setter Property="BorderThickness" Value="2,1,2,1"/>
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
@@ -452,12 +458,14 @@
                         </Style>
                     </Canvas.Style>
                     
-                    <!-- Invisible hit area for clicking (wider than visible line) -->
+                    <!-- Invisible hit area for clicking and hovering (wider than visible line) -->
                     <Path Data="{Binding PathData}"
                           Stroke="Transparent"
                           StrokeThickness="12"
                           Cursor="Hand"
                           MouseLeftButtonDown="Relationship_MouseLeftButtonDown"
+                          MouseEnter="Relationship_MouseEnter"
+                          MouseLeave="Relationship_MouseLeave"
                           ToolTip="{Binding Tooltip}"/>
                     
                     <!-- Relationship Path (main line) -->

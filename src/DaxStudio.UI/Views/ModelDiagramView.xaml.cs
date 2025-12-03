@@ -752,6 +752,25 @@ namespace DaxStudio.UI.Views
             }
         }
 
+        private void Relationship_MouseEnter(object sender, MouseEventArgs e)
+        {
+            if (sender is FrameworkElement element && element.DataContext is ModelDiagramRelationshipViewModel relVm)
+            {
+                if (DataContext is ModelDiagramViewModel vm)
+                {
+                    vm.HoverRelationship(relVm);
+                }
+            }
+        }
+
+        private void Relationship_MouseLeave(object sender, MouseEventArgs e)
+        {
+            if (DataContext is ModelDiagramViewModel vm)
+            {
+                vm.UnhoverRelationship();
+            }
+        }
+
         #endregion
 
         #region Canvas Panning
