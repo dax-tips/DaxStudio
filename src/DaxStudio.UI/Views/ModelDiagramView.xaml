@@ -940,6 +940,49 @@
                     <ComboBoxItem Content="All Tables"/>
                     <ComboBoxItem Content="Date Tables"/>
                 </ComboBox>
+                
+                <!-- Perspective selector dropdown -->
+                <ComboBox DockPanel.Dock="Right"
+                          ItemsSource="{Binding AvailablePerspectives}"
+                          SelectedItem="{Binding SelectedPerspective, Mode=TwoWay}"
+                          Visibility="{Binding HasPerspectives, Converter={StaticResource BoolToVisibilityConverter}}"
+                          MinWidth="120"
+                          MaxWidth="200"
+                          Margin="4"
+                          Padding="4,2"
+                          ToolTip="Switch between model perspectives">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="📊" Margin="0,0,4,0" FontSize="12">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsPerspective}" Value="False">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text="🔍" Margin="0,0,4,0" FontSize="12">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsPerspective}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text="{Binding Caption}"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
 
             </DockPanel>
         </Border>

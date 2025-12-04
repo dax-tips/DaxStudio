@@ -326,6 +326,86 @@ namespace DaxStudio.UI.ViewModels
             }
         }
 
+        #region Perspectives
+
+        private ADOTabularModelCollection _availablePerspectives;
+        /// <summary>
+        /// Collection of available models/perspectives for the current connection.
+        /// </summary>
+        public ADOTabularModelCollection AvailablePerspectives
+        {
+            get => _availablePerspectives;
+            private set
+            {
+                _availablePerspectives = value;
+                NotifyOfPropertyChange();
+                NotifyOfPropertyChange(nameof(HasPerspectives));
+            }
+        }
+
+        /// <summary>
+        /// Whether there are multiple perspectives available (including the base model).
+        /// </summary>
+        public bool HasPerspectives => _availablePerspectives != null && _availablePerspectives.Count > 1;
+
+        private ADOTabularModel _selectedPerspective;
+        /// <summary>
+        /// The currently selected perspective/model.
+        /// </summary>
+        public ADOTabularModel SelectedPerspective
+        {
+            get => _selectedPerspective;
+            set
+            {
+                if (_selectedPerspective == value) return;
+                _selectedPerspective = value;
+                NotifyOfPropertyChange();
+                
+                // Load the selected perspective if it's different from current model
+                if (_selectedPerspective != null && _selectedPerspective != _model)
+                {
+                    LoadFromModel(_selectedPerspective, forceReload: true);
+                    
+                    // Also notify the metadata provider to sync the selection
+                    _ = _metadataProvider.SetSelectedModelAsync(_selectedPerspective);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Updates the available perspectives from the metadata provider.
+        /// </summary>
+        private void RefreshAvailablePerspectives()
+        {
+            try
+            {
+                var models = _metadataProvider?.GetModels();
+                if (models != null && models.Count > 0)
+                {
+                    AvailablePerspectives = models;
+                    // Set selected perspective to match current model
+                    if (_model != null && models.Any(m => m.Name == _model.Name))
+                    {
+                        _selectedPerspective = models[_model.Name];
+                        NotifyOfPropertyChange(nameof(SelectedPerspective));
+                    }
+                }
+                else
+                {
+                    AvailablePerspectives = null;
+                    _selectedPerspective = null;
+                    NotifyOfPropertyChange(nameof(SelectedPerspective));
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "{class} {method} Error refreshing perspectives", nameof(ModelDiagramViewModel), nameof(RefreshAvailablePerspectives));
+                AvailablePerspectives = null;
+            }
+        }
+
+        #endregion
+
         private int _tableFilter = 0;
         /// <summary>
         /// Filter tables by type: 0=All, 1=Date Tables Only
@@ -678,6 +758,16 @@ namespace DaxStudio.UI.ViewModels
 
             // Set loading flag BEFORE starting async work to prevent duplicate calls
             IsLoading = true;
+            
+            // Refresh available perspectives when loading a model
+            RefreshAvailablePerspectives();
+            
+            // Update selected perspective to match the model being loaded
+            if (_availablePerspectives != null && _availablePerspectives.Any(m => m.Name == model.Name))
+            {
+                _selectedPerspective = _availablePerspectives[model.Name];
+                NotifyOfPropertyChange(nameof(SelectedPerspective));
+            }
 
             // For large models, load asynchronously
             var tableCount = model.Tables.Count(t => ShowHiddenObjects || t.IsVisible);
@@ -2801,11 +2891,30 @@ namespace DaxStudio.UI.ViewModels
                 var pathTables = new HashSet<string>(foundPath, StringComparer.OrdinalIgnoreCase);
                 var pathRels = new HashSet<ModelDiagramRelationshipViewModel>(foundRels);
                 
+                // Clear current selection and add all path tables to selection
+                SelectedTables.Clear();
+                
                 foreach (var table in Tables)
                 {
                     table.IsDimmed = !pathTables.Contains(table.TableName);
                     table.IsSelected = pathTables.Contains(table.TableName);
+                    
+                    // Add path tables to selection (including intermediary tables)
+                    if (pathTables.Contains(table.TableName))
+                    {
+                        SelectedTables.Add(table);
+                    }
                 }
+                
+                // Update selected table reference
+                if (SelectedTables.Count > 0)
+                {
+                    _selectedTable = SelectedTables[0];
+                    NotifyOfPropertyChange(nameof(SelectedTable));
+                }
+                NotifyOfPropertyChange(nameof(HasMultipleSelection));
+                NotifyOfPropertyChange(nameof(HasSelection));
+                NotifyOfPropertyChange(nameof(CanHighlightPath));
                 
                 foreach (var rel in Relationships)
                 {
