@@ -97,6 +97,12 @@
                                     <Separator/>
                                     <MenuItem Header="Collapse" Click="CollapseTable_Click"/>
                                     <MenuItem Header="Expand" Click="ExpandTable_Click"/>
+                                    <Separator/>
+                                    <MenuItem Header="Show Related Tables" Click="ShowRelatedTables_Click" ToolTip="Show tables directly connected to this table"/>
+                                    <MenuItem Header="Hide This Table" Click="HideThisTable_Click" ToolTip="Hide this table from the diagram"/>
+                                    <MenuItem Header="Hide Unselected Tables" Click="HideUnselectedTables_Click" ToolTip="Hide all tables except selected ones"/>
+                                    <Separator/>
+                                    <MenuItem Header="Show All Tables" Click="ShowAllTables_Click" ToolTip="Show all hidden tables"/>
                                 </ContextMenu>
                             </Border.ContextMenu>
                             <Grid>
@@ -597,6 +603,150 @@
                     </Border>
                 </Canvas>
             </DataTemplate>
+            
+            <!-- Annotation Template -->
+            <DataTemplate x:Key="AnnotationTemplate" DataType="{x:Type vm:ModelDiagramAnnotationViewModel}">
+                <Border Width="{Binding Width}" 
+                        Height="{Binding Height}"
+                        MinWidth="80" 
+                        MinHeight="30"
+                        CornerRadius="4"
+                        Padding="6"
+                        Cursor="SizeAll"
+                        MouseLeftButtonDown="Annotation_MouseLeftButtonDown"
+                        MouseLeftButtonUp="Annotation_MouseLeftButtonUp"
+                        MouseMove="Annotation_MouseMove">
+                    <Border.Background>
+                        <SolidColorBrush Color="{Binding BackgroundColor}"/>
+                    </Border.Background>
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="BorderBrush" Value="#CCCCCC"/>
+                            <Setter Property="BorderThickness" Value="1"/>
+                            <Setter Property="Effect">
+                                <Setter.Value>
+                                    <DropShadowEffect ShadowDepth="2" Opacity="0.2" BlurRadius="4"/>
+                                </Setter.Value>
+                            </Setter>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                    <Setter Property="BorderBrush" Value="#2196F3"/>
+                                    <Setter Property="BorderThickness" Value="2"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <Border.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="Edit" Click="AnnotationEdit_Click"/>
+                            <Separator/>
+                            <MenuItem Header="Bold" IsCheckable="True" IsChecked="{Binding IsBold, Mode=TwoWay}" Checked="AnnotationFormatChanged" Unchecked="AnnotationFormatChanged"/>
+                            <MenuItem Header="Italic" IsCheckable="True" IsChecked="{Binding IsItalic, Mode=TwoWay}" Checked="AnnotationFormatChanged" Unchecked="AnnotationFormatChanged"/>
+                            <MenuItem Header="Font Size">
+                                <MenuItem Header="Small (9)" Click="AnnotationFontSize9_Click"/>
+                                <MenuItem Header="Normal (11)" Click="AnnotationFontSize11_Click"/>
+                                <MenuItem Header="Medium (14)" Click="AnnotationFontSize14_Click"/>
+                                <MenuItem Header="Large (18)" Click="AnnotationFontSize18_Click"/>
+                                <MenuItem Header="Extra Large (24)" Click="AnnotationFontSize24_Click"/>
+                            </MenuItem>
+                            <Separator/>
+                            <MenuItem Header="Color">
+                                <MenuItem Header="Yellow" Click="AnnotationColorYellow_Click" Tag="#FFFDE7"/>
+                                <MenuItem Header="Blue" Click="AnnotationColorBlue_Click" Tag="#E3F2FD"/>
+                                <MenuItem Header="Green" Click="AnnotationColorGreen_Click" Tag="#E8F5E9"/>
+                                <MenuItem Header="Pink" Click="AnnotationColorPink_Click" Tag="#FCE4EC"/>
+                                <MenuItem Header="Orange" Click="AnnotationColorOrange_Click" Tag="#FFF3E0"/>
+                                <MenuItem Header="White" Click="AnnotationColorWhite_Click" Tag="#FFFFFF"/>
+                            </MenuItem>
+                            <Separator/>
+                            <MenuItem Header="Delete" Click="AnnotationDelete_Click"/>
+                        </ContextMenu>
+                    </Border.ContextMenu>
+                    <Grid>
+                        <!-- Display mode: TextBlock -->
+                        <TextBlock Text="{Binding Text}"
+                                   TextWrapping="Wrap"
+                                   TextTrimming="CharacterEllipsis"
+                                   FontSize="{Binding FontSize}"
+                                   FontWeight="{Binding FontWeight}"
+                                   FontStyle="{Binding FontStyle}"
+                                   Foreground="#333333"
+                                   VerticalAlignment="Top">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsEditing}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <!-- Edit mode: TextBox -->
+                        <TextBox Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}"
+                                 TextWrapping="Wrap"
+                                 AcceptsReturn="True"
+                                 FontSize="{Binding FontSize}"
+                                 FontWeight="{Binding FontWeight}"
+                                 FontStyle="{Binding FontStyle}"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 VerticalAlignment="Stretch"
+                                 LostFocus="AnnotationTextBox_LostFocus"
+                                 PreviewKeyDown="AnnotationTextBox_KeyDown"
+                                 ToolTip="Ctrl+B: Bold, Ctrl+I: Italic, Ctrl++/-: Font size">
+                            <TextBox.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Cut" Command="ApplicationCommands.Cut"/>
+                                    <MenuItem Header="Copy" Command="ApplicationCommands.Copy"/>
+                                    <MenuItem Header="Paste" Command="ApplicationCommands.Paste"/>
+                                    <Separator/>
+                                    <MenuItem Header="Bold" IsCheckable="True" IsChecked="{Binding IsBold, Mode=TwoWay}" Checked="AnnotationFormatChanged" Unchecked="AnnotationFormatChanged" InputGestureText="Ctrl+B"/>
+                                    <MenuItem Header="Italic" IsCheckable="True" IsChecked="{Binding IsItalic, Mode=TwoWay}" Checked="AnnotationFormatChanged" Unchecked="AnnotationFormatChanged" InputGestureText="Ctrl+I"/>
+                                    <MenuItem Header="Font Size">
+                                        <MenuItem Header="Small (9)" Click="AnnotationFontSize9_Click"/>
+                                        <MenuItem Header="Normal (11)" Click="AnnotationFontSize11_Click"/>
+                                        <MenuItem Header="Medium (14)" Click="AnnotationFontSize14_Click"/>
+                                        <MenuItem Header="Large (18)" Click="AnnotationFontSize18_Click"/>
+                                        <MenuItem Header="Extra Large (24)" Click="AnnotationFontSize24_Click"/>
+                                    </MenuItem>
+                                    <Separator/>
+                                    <MenuItem Header="Color">
+                                        <MenuItem Header="Yellow" Click="AnnotationColorYellow_Click"/>
+                                        <MenuItem Header="Blue" Click="AnnotationColorBlue_Click"/>
+                                        <MenuItem Header="Green" Click="AnnotationColorGreen_Click"/>
+                                        <MenuItem Header="Pink" Click="AnnotationColorPink_Click"/>
+                                        <MenuItem Header="Orange" Click="AnnotationColorOrange_Click"/>
+                                        <MenuItem Header="White" Click="AnnotationColorWhite_Click"/>
+                                    </MenuItem>
+                                    <Separator/>
+                                    <MenuItem Header="Delete" Click="AnnotationDelete_Click"/>
+                                </ContextMenu>
+                            </TextBox.ContextMenu>
+                            <TextBox.Style>
+                                <Style TargetType="TextBox">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsEditing}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBox.Style>
+                        </TextBox>
+                        <!-- Resize handle -->
+                        <Polygon Points="0,10 10,10 10,0"
+                                 HorizontalAlignment="Right"
+                                 VerticalAlignment="Bottom"
+                                 Fill="#CCCCCC"
+                                 Cursor="SizeNWSE"
+                                 MouseLeftButtonDown="AnnotationResize_MouseLeftButtonDown"
+                                 MouseLeftButtonUp="AnnotationResize_MouseLeftButtonUp"
+                                 MouseMove="AnnotationResize_MouseMove"/>
+                    </Grid>
+                </Border>
+            </DataTemplate>
         </ResourceDictionary>
     </UserControl.Resources>
     
@@ -817,6 +967,9 @@
                 <!-- Context Menu for Canvas -->
                 <Grid.ContextMenu>
                     <ContextMenu>
+                        <MenuItem Header="Add Annotation" Click="AddAnnotation_Click" 
+                                  ToolTip="Add a text annotation to the diagram"/>
+                        <Separator/>
                         <MenuItem Header="Expand All Tables" cal:Message.Attach="ExpandAll"/>
                         <MenuItem Header="Collapse All Tables" cal:Message.Attach="CollapseAll"/>
                         <Separator/>
@@ -833,6 +986,9 @@
                                   ToolTip="Select exactly 2 tables to highlight the shortest path between them"/>
                         <Separator/>
                         <MenuItem Header="Hide Selected Tables" cal:Message.Attach="HideSelectedTables" InputGestureText="Delete"/>
+                        <MenuItem Header="Hide Non-Selected Tables" cal:Message.Attach="HideNonSelectedTables" 
+                                  IsEnabled="{Binding HasSelection}"
+                                  ToolTip="Hide all tables except the selected ones"/>
                         <MenuItem Header="Show All Tables" cal:Message.Attach="ShowAllTables" 
                                   ToolTip="Show all hidden tables"/>
                         <Separator/>
@@ -882,6 +1038,23 @@
                 <ItemsControl x:Name="DiagramCanvas"
                               ItemsSource="{Binding Tables}"
                               ItemTemplate="{StaticResource TableCardTemplate}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <Canvas/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemContainerStyle>
+                        <Style TargetType="ContentPresenter">
+                            <Setter Property="Canvas.Left" Value="{Binding X}"/>
+                            <Setter Property="Canvas.Top" Value="{Binding Y}"/>
+                        </Style>
+                    </ItemsControl.ItemContainerStyle>
+                </ItemsControl>
+                
+                <!-- Annotations (on top of tables) -->
+                <ItemsControl x:Name="AnnotationsCanvas"
+                              ItemsSource="{Binding Annotations}"
+                              ItemTemplate="{StaticResource AnnotationTemplate}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
                             <Canvas/>

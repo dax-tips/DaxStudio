@@ -133,37 +133,37 @@ namespace DaxStudio.UI.Views
         {
             try
             {
-                // Find the canvas to render
-                var canvas = DiagramCanvas;
-                if (canvas == null) return;
+                // Use DiagramGrid to capture both relationships and tables (not just DiagramCanvas which is tables only)
+                var grid = DiagramGrid;
+                if (grid == null) return;
 
                 // Get the actual size of the content
-                var bounds = VisualTreeHelper.GetDescendantBounds(canvas);
+                var bounds = VisualTreeHelper.GetDescendantBounds(grid);
                 if (bounds.IsEmpty)
                 {
-                    bounds = new Rect(0, 0, canvas.ActualWidth, canvas.ActualHeight);
+                    bounds = new Rect(0, 0, grid.ActualWidth, grid.ActualHeight);
                 }
 
                 // Create a render target with proper DPI
                 var dpi = 96d;
-                var renderWidth = (int)System.Math.Max(bounds.Width + 40, canvas.ActualWidth);
-                var renderHeight = (int)System.Math.Max(bounds.Height + 40, canvas.ActualHeight);
+                var renderWidth = (int)System.Math.Max(bounds.Width + 40, grid.ActualWidth);
+                var renderHeight = (int)System.Math.Max(bounds.Height + 40, grid.ActualHeight);
 
                 var renderTarget = new RenderTargetBitmap(
                     renderWidth, renderHeight,
                     dpi, dpi,
                     PixelFormats.Pbgra32);
 
-                // Create a visual brush to render from the canvas with background
+                // Create a visual brush to render from the grid with background
                 var drawingVisual = new DrawingVisual();
                 using (var dc = drawingVisual.RenderOpen())
                 {
                     // Draw white background
                     dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, renderWidth, renderHeight));
 
-                    // Draw the canvas content
-                    var visualBrush = new VisualBrush(canvas);
-                    dc.DrawRectangle(visualBrush, null, new Rect(0, 0, canvas.ActualWidth, canvas.ActualHeight));
+                    // Draw the grid content (includes relationships, tables, and annotations)
+                    var visualBrush = new VisualBrush(grid);
+                    dc.DrawRectangle(visualBrush, null, new Rect(0, 0, grid.ActualWidth, grid.ActualHeight));
                 }
 
                 renderTarget.Render(drawingVisual);
@@ -192,18 +192,19 @@ namespace DaxStudio.UI.Views
         {
             try
             {
-                var canvas = DiagramCanvas;
-                if (canvas == null) return;
+                // Use DiagramGrid to capture both relationships and tables (not just DiagramCanvas which is tables only)
+                var grid = DiagramGrid;
+                if (grid == null) return;
 
-                var bounds = VisualTreeHelper.GetDescendantBounds(canvas);
+                var bounds = VisualTreeHelper.GetDescendantBounds(grid);
                 if (bounds.IsEmpty)
                 {
-                    bounds = new Rect(0, 0, canvas.ActualWidth, canvas.ActualHeight);
+                    bounds = new Rect(0, 0, grid.ActualWidth, grid.ActualHeight);
                 }
 
                 var dpi = 96d;
-                var renderWidth = (int)System.Math.Max(bounds.Width + 40, canvas.ActualWidth);
-                var renderHeight = (int)System.Math.Max(bounds.Height + 40, canvas.ActualHeight);
+                var renderWidth = (int)System.Math.Max(bounds.Width + 40, grid.ActualWidth);
+                var renderHeight = (int)System.Math.Max(bounds.Height + 40, grid.ActualHeight);
 
                 var renderTarget = new RenderTargetBitmap(
                     renderWidth, renderHeight,
@@ -214,8 +215,8 @@ namespace DaxStudio.UI.Views
                 using (var dc = drawingVisual.RenderOpen())
                 {
                     dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, renderWidth, renderHeight));
-                    var visualBrush = new VisualBrush(canvas);
-                    dc.DrawRectangle(visualBrush, null, new Rect(0, 0, canvas.ActualWidth, canvas.ActualHeight));
+                    var visualBrush = new VisualBrush(grid);
+                    dc.DrawRectangle(visualBrush, null, new Rect(0, 0, grid.ActualWidth, grid.ActualHeight));
                 }
 
                 renderTarget.Render(drawingVisual);
@@ -928,6 +929,478 @@ namespace DaxStudio.UI.Views
                 {
                     vm.SaveLayoutAfterDrag();
                 }
+            }
+        }
+
+        #endregion
+
+        #region Annotation Handling
+
+        private bool _isAnnotationDragging;
+        private Point _annotationDragStartPoint;
+        private Point _annotationStartPosition;
+        private ModelDiagramAnnotationViewModel _draggedAnnotation;
+        private FrameworkElement _draggedAnnotationElement;
+
+        private bool _isAnnotationResizing;
+        private Point _annotationResizeStartPoint;
+        private double _annotationResizeStartWidth;
+        private double _annotationResizeStartHeight;
+        private ModelDiagramAnnotationViewModel _resizingAnnotation;
+        private FrameworkElement _resizingAnnotationElement;
+
+        /// <summary>
+        /// Finds the parent annotation view model from a framework element.
+        /// </summary>
+        private ModelDiagramAnnotationViewModel FindParentAnnotationViewModel(FrameworkElement element)
+        {
+            var parent = element;
+            while (parent != null)
+            {
+                if (parent.DataContext is ModelDiagramAnnotationViewModel annotVm)
+                {
+                    return annotVm;
+                }
+                parent = VisualTreeHelper.GetParent(parent) as FrameworkElement;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Handles mouse down on annotation border to start dragging or edit on double-click.
+        /// </summary>
+        private void Annotation_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is FrameworkElement element && element.DataContext is ModelDiagramAnnotationViewModel annotVm)
+            {
+                // Handle double-click to enter edit mode
+                if (e.ClickCount == 2)
+                {
+                    annotVm.IsEditing = true;
+                    e.Handled = true;
+                    return;
+                }
+
+                _coordinateRoot = FindCoordinateRoot(element);
+                if (_coordinateRoot == null) return;
+
+                // Select this annotation
+                if (DataContext is ModelDiagramViewModel vm)
+                {
+                    vm.SelectedAnnotation = annotVm;
+                }
+
+                // Start drag operation
+                _isAnnotationDragging = true;
+                _annotationDragStartPoint = e.GetPosition(_coordinateRoot);
+                _annotationStartPosition = new Point(annotVm.X, annotVm.Y);
+                _draggedAnnotation = annotVm;
+                _draggedAnnotationElement = element;
+                element.CaptureMouse();
+
+                e.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// Handles mouse up on annotation to end dragging.
+        /// </summary>
+        private void Annotation_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (_isAnnotationDragging)
+            {
+                _isAnnotationDragging = false;
+                _draggedAnnotationElement?.ReleaseMouseCapture();
+
+                // Save layout after drag
+                if (DataContext is ModelDiagramViewModel vm)
+                {
+                    vm.SaveLayoutAfterDrag();
+                }
+
+                e.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// Handles mouse move on annotation for dragging.
+        /// </summary>
+        private void Annotation_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_isAnnotationDragging && _draggedAnnotation != null && _coordinateRoot != null)
+            {
+                var currentPosition = e.GetPosition(_coordinateRoot);
+                var delta = currentPosition - _annotationDragStartPoint;
+
+                // Update annotation position
+                if (DataContext is ModelDiagramViewModel vm)
+                {
+                    _draggedAnnotation.X = System.Math.Max(0, vm.SnapToGridValue(_annotationStartPosition.X + delta.X));
+                    _draggedAnnotation.Y = System.Math.Max(0, vm.SnapToGridValue(_annotationStartPosition.Y + delta.Y));
+                }
+
+                e.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// Handles when annotation text box loses focus to exit edit mode.
+        /// </summary>
+        private void AnnotationTextBox_LostFocus(object sender, RoutedEventArgs e)
+        {
+            if (sender is TextBox textBox && textBox.DataContext is ModelDiagramAnnotationViewModel annotVm)
+            {
+                annotVm.IsEditing = false;
+                
+                // Save layout after editing
+                if (DataContext is ModelDiagramViewModel vm)
+                {
+                    vm.SaveLayoutAfterDrag();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Handles key press in annotation text box.
+        /// Supports: Escape to exit edit, Ctrl+B for bold, Ctrl+I for italic, Ctrl+Plus/Minus for font size.
+        /// </summary>
+        private void AnnotationTextBox_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (sender is TextBox textBox && textBox.DataContext is ModelDiagramAnnotationViewModel annotVm)
+            {
+                if (e.Key == Key.Escape)
+                {
+                    annotVm.IsEditing = false;
+                    e.Handled = true;
+                    return;
+                }
+
+                // Font formatting shortcuts (Ctrl+key)
+                if (Keyboard.Modifiers == ModifierKeys.Control)
+                {
+                    switch (e.Key)
+                    {
+                        case Key.B:
+                            annotVm.IsBold = !annotVm.IsBold;
+                            SaveAnnotationFormatting();
+                            e.Handled = true;
+                            break;
+                        case Key.I:
+                            annotVm.IsItalic = !annotVm.IsItalic;
+                            SaveAnnotationFormatting();
+                            e.Handled = true;
+                            break;
+                        case Key.OemPlus:
+                        case Key.Add:
+                            // Increase font size
+                            IncreaseFontSize(annotVm);
+                            SaveAnnotationFormatting();
+                            e.Handled = true;
+                            break;
+                        case Key.OemMinus:
+                        case Key.Subtract:
+                            // Decrease font size
+                            DecreaseFontSize(annotVm);
+                            SaveAnnotationFormatting();
+                            e.Handled = true;
+                            break;
+                    }
+                }
+            }
+        }
+
+        private void SaveAnnotationFormatting()
+        {
+            if (DataContext is ModelDiagramViewModel vm)
+            {
+                vm.SaveLayoutAfterDrag();
+            }
+        }
+
+        private static readonly double[] FontSizes = { 9, 11, 14, 18, 24 };
+
+        private void IncreaseFontSize(ModelDiagramAnnotationViewModel annotVm)
+        {
+            var currentIndex = System.Array.FindIndex(FontSizes, s => s >= annotVm.FontSize);
+            if (currentIndex < 0) currentIndex = 1; // Default to 11
+            if (currentIndex < FontSizes.Length - 1)
+            {
+                annotVm.FontSize = FontSizes[currentIndex + 1];
+            }
+        }
+
+        private void DecreaseFontSize(ModelDiagramAnnotationViewModel annotVm)
+        {
+            var currentIndex = System.Array.FindIndex(FontSizes, s => s >= annotVm.FontSize);
+            if (currentIndex < 0) currentIndex = 1; // Default to 11
+            if (currentIndex > 0)
+            {
+                annotVm.FontSize = FontSizes[currentIndex - 1];
+            }
+        }
+
+        /// <summary>
+        /// Handles mouse down on annotation resize handle.
+        /// </summary>
+        private void AnnotationResize_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is FrameworkElement element)
+            {
+                var annotVm = FindParentAnnotationViewModel(element);
+                if (annotVm == null) return;
+
+                _coordinateRoot = FindCoordinateRoot(element);
+                if (_coordinateRoot == null) return;
+
+                _isAnnotationResizing = true;
+                _annotationResizeStartPoint = e.GetPosition(_coordinateRoot);
+                _annotationResizeStartWidth = annotVm.Width;
+                _annotationResizeStartHeight = annotVm.Height;
+                _resizingAnnotation = annotVm;
+                _resizingAnnotationElement = element;
+                element.CaptureMouse();
+                e.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// Handles mouse up to end annotation resize.
+        /// </summary>
+        private void AnnotationResize_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (_isAnnotationResizing)
+            {
+                _isAnnotationResizing = false;
+                _resizingAnnotationElement?.ReleaseMouseCapture();
+
+                // Save layout after resize
+                if (DataContext is ModelDiagramViewModel vm)
+                {
+                    vm.SaveLayoutAfterDrag();
+                }
+
+                e.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// Handles mouse move for annotation resize.
+        /// </summary>
+        private void AnnotationResize_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_isAnnotationResizing && _resizingAnnotation != null && _coordinateRoot != null)
+            {
+                var currentPosition = e.GetPosition(_coordinateRoot);
+                var deltaX = currentPosition.X - _annotationResizeStartPoint.X;
+                var deltaY = currentPosition.Y - _annotationResizeStartPoint.Y;
+
+                _resizingAnnotation.Width = System.Math.Max(80, _annotationResizeStartWidth + deltaX);
+                _resizingAnnotation.Height = System.Math.Max(30, _annotationResizeStartHeight + deltaY);
+
+                e.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// Handles click on "Add Annotation" context menu item.
+        /// </summary>
+        private void AddAnnotation_Click(object sender, RoutedEventArgs e)
+        {
+            if (DataContext is ModelDiagramViewModel vm)
+            {
+                // Get click position from context menu
+                if (sender is MenuItem menuItem && menuItem.Parent is ContextMenu contextMenu)
+                {
+                    // Get the position where the context menu was opened
+                    var placementTarget = contextMenu.PlacementTarget as FrameworkElement;
+                    if (placementTarget != null)
+                    {
+                        // Use the context menu's placement rectangle if available
+                        var rect = contextMenu.PlacementRectangle;
+                        if (rect.IsEmpty)
+                        {
+                            // Calculate position from scroll viewer
+                            var mousePos = Mouse.GetPosition(DiagramGrid);
+                            vm.AddAnnotation(mousePos.X, mousePos.Y);
+                        }
+                        else
+                        {
+                            vm.AddAnnotation(rect.X, rect.Y);
+                        }
+                    }
+                    else
+                    {
+                        // Fallback: add at center
+                        vm.AddAnnotationAtCenter();
+                    }
+                }
+                else
+                {
+                    // Fallback: add at center
+                    vm.AddAnnotationAtCenter();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Handles click on "Edit" context menu item for annotation.
+        /// </summary>
+        private void AnnotationEdit_Click(object sender, RoutedEventArgs e)
+        {
+            var annotVm = FindAnnotationFromMenuItem(sender);
+            if (annotVm != null)
+            {
+                annotVm.IsEditing = true;
+            }
+        }
+
+        /// <summary>
+        /// Handles click on "Delete" context menu item for annotation.
+        /// </summary>
+        private void AnnotationDelete_Click(object sender, RoutedEventArgs e)
+        {
+            var annotVm = FindAnnotationFromMenuItem(sender);
+            if (annotVm != null && DataContext is ModelDiagramViewModel vm)
+            {
+                vm.DeleteAnnotation(annotVm);
+            }
+        }
+
+        /// <summary>
+        /// Sets annotation color from context menu click.
+        /// </summary>
+        private void SetAnnotationColor(object sender, string colorHex)
+        {
+            var annotVm = FindAnnotationFromMenuItem(sender);
+            if (annotVm != null && DataContext is ModelDiagramViewModel vm)
+            {
+                vm.SetAnnotationColor(annotVm, colorHex);
+            }
+        }
+
+        private void AnnotationColorYellow_Click(object sender, RoutedEventArgs e) => SetAnnotationColor(sender, "#FFFDE7");
+        private void AnnotationColorBlue_Click(object sender, RoutedEventArgs e) => SetAnnotationColor(sender, "#E3F2FD");
+        private void AnnotationColorGreen_Click(object sender, RoutedEventArgs e) => SetAnnotationColor(sender, "#E8F5E9");
+        private void AnnotationColorPink_Click(object sender, RoutedEventArgs e) => SetAnnotationColor(sender, "#FCE4EC");
+        private void AnnotationColorOrange_Click(object sender, RoutedEventArgs e) => SetAnnotationColor(sender, "#FFF3E0");
+        private void AnnotationColorWhite_Click(object sender, RoutedEventArgs e) => SetAnnotationColor(sender, "#FFFFFF");
+
+        /// <summary>
+        /// Finds the annotation ViewModel from a context menu item.
+        /// Works for both the Border context menu and the TextBox context menu.
+        /// </summary>
+        private ModelDiagramAnnotationViewModel FindAnnotationFromMenuItem(object sender)
+        {
+            if (sender is MenuItem menuItem)
+            {
+                // Navigate up to find the context menu
+                var parent = menuItem.Parent as ItemsControl;
+                while (parent != null && !(parent is ContextMenu))
+                {
+                    parent = parent.Parent as ItemsControl;
+                }
+
+                if (parent is ContextMenu contextMenu && contextMenu.PlacementTarget is FrameworkElement element)
+                {
+                    // Check if the element itself is the annotation (Border case)
+                    if (element.DataContext is ModelDiagramAnnotationViewModel annotVm)
+                    {
+                        return annotVm;
+                    }
+                    
+                    // Check parent hierarchy (TextBox inside Border case)
+                    var visualParent = VisualTreeHelper.GetParent(element) as FrameworkElement;
+                    while (visualParent != null)
+                    {
+                        if (visualParent.DataContext is ModelDiagramAnnotationViewModel parentAnnotVm)
+                        {
+                            return parentAnnotVm;
+                        }
+                        visualParent = VisualTreeHelper.GetParent(visualParent) as FrameworkElement;
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Handles when Bold or Italic checkbox state changes via binding.
+        /// Just saves the layout since the binding already updated the property.
+        /// </summary>
+        private void AnnotationFormatChanged(object sender, RoutedEventArgs e)
+        {
+            if (DataContext is ModelDiagramViewModel vm)
+            {
+                vm.SaveLayoutAfterDrag();
+            }
+        }
+
+        private void SetAnnotationFontSize(object sender, double fontSize)
+        {
+            var annotVm = FindAnnotationFromMenuItem(sender);
+            if (annotVm != null && DataContext is ModelDiagramViewModel vm)
+            {
+                annotVm.FontSize = fontSize;
+                vm.SaveLayoutAfterDrag();
+            }
+        }
+
+        private void AnnotationFontSize9_Click(object sender, RoutedEventArgs e) => SetAnnotationFontSize(sender, 9);
+        private void AnnotationFontSize11_Click(object sender, RoutedEventArgs e) => SetAnnotationFontSize(sender, 11);
+        private void AnnotationFontSize14_Click(object sender, RoutedEventArgs e) => SetAnnotationFontSize(sender, 14);
+        private void AnnotationFontSize18_Click(object sender, RoutedEventArgs e) => SetAnnotationFontSize(sender, 18);
+        private void AnnotationFontSize24_Click(object sender, RoutedEventArgs e) => SetAnnotationFontSize(sender, 24);
+
+        #endregion
+
+        #region Table Show/Hide Handlers
+
+        private void ShowRelatedTables_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuItem menuItem && 
+                menuItem.Parent is ContextMenu contextMenu && 
+                contextMenu.PlacementTarget is FrameworkElement element &&
+                element.DataContext is ModelDiagramTableViewModel tableVm &&
+                DataContext is ModelDiagramViewModel vm)
+            {
+                vm.ShowRelatedTables(tableVm);
+            }
+        }
+
+        private void HideThisTable_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuItem menuItem && 
+                menuItem.Parent is ContextMenu contextMenu && 
+                contextMenu.PlacementTarget is FrameworkElement element &&
+                element.DataContext is ModelDiagramTableViewModel tableVm &&
+                DataContext is ModelDiagramViewModel vm)
+            {
+                vm.HideTable(tableVm);
+            }
+        }
+
+        private void HideUnselectedTables_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuItem menuItem && 
+                menuItem.Parent is ContextMenu contextMenu && 
+                contextMenu.PlacementTarget is FrameworkElement element &&
+                element.DataContext is ModelDiagramTableViewModel tableVm &&
+                DataContext is ModelDiagramViewModel vm)
+            {
+                // Make sure this table is selected first
+                if (!vm.SelectedTables.Contains(tableVm))
+                {
+                    vm.SelectSingleTable(tableVm);
+                }
+                vm.HideNonSelectedTables();
+            }
+        }
+
+        private void ShowAllTables_Click(object sender, RoutedEventArgs e)
+        {
+            if (DataContext is ModelDiagramViewModel vm)
+            {
+                vm.ShowAllTables();
             }
         }
 

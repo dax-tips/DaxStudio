@@ -89,6 +89,11 @@ namespace DaxStudio.UI.ViewModels
         public BindableCollection<ModelDiagramRelationshipViewModel> Relationships { get; } = new BindableCollection<ModelDiagramRelationshipViewModel>();
 
         /// <summary>
+        /// Collection of text annotations for display.
+        /// </summary>
+        public BindableCollection<ModelDiagramAnnotationViewModel> Annotations { get; } = new BindableCollection<ModelDiagramAnnotationViewModel>();
+
+        /// <summary>
         /// Summary text showing counts.
         /// </summary>
         public string SummaryText => _model != null
@@ -476,6 +481,11 @@ namespace DaxStudio.UI.ViewModels
         /// </summary>
         public bool HasMultipleSelection => SelectedTables.Count > 1;
 
+        /// <summary>
+        /// Whether at least one table is currently selected.
+        /// </summary>
+        public bool HasSelection => SelectedTables.Count > 0 || _selectedTable != null;
+
         private ModelDiagramTableViewModel _selectedTable;
         /// <summary>
         /// The currently selected table.
@@ -708,6 +718,7 @@ namespace DaxStudio.UI.ViewModels
                 {
                     Tables.Clear();
                     Relationships.Clear();
+                    Annotations.Clear();
                 });
 
                 // Stage 2: Materialize all model data on UI thread first (ADOTabular may log during lazy loading)
@@ -1311,6 +1322,7 @@ namespace DaxStudio.UI.ViewModels
                 _currentModelKey = GenerateModelKey(model);
                 Tables.Clear();
                 Relationships.Clear();
+                Annotations.Clear();
 
                 // Create view models for tables
                 foreach (var table in model.Tables)
@@ -2256,6 +2268,7 @@ namespace DaxStudio.UI.ViewModels
                 table.IsSelected = true;
             }
             NotifyOfPropertyChange(nameof(HasMultipleSelection));
+            NotifyOfPropertyChange(nameof(HasSelection));
             NotifyOfPropertyChange(nameof(CanHighlightPath));
         }
 
@@ -2273,6 +2286,7 @@ namespace DaxStudio.UI.ViewModels
                 NotifyOfPropertyChange(nameof(SelectedTable));
             }
             NotifyOfPropertyChange(nameof(HasMultipleSelection));
+            NotifyOfPropertyChange(nameof(HasSelection));
             NotifyOfPropertyChange(nameof(CanHighlightPath));
             UpdateRelationshipHighlighting();
         }
@@ -2448,6 +2462,7 @@ namespace DaxStudio.UI.ViewModels
             ClearColumnHighlighting(); // Clear column highlighting
             NotifyOfPropertyChange(nameof(SelectedTable));
             NotifyOfPropertyChange(nameof(HasMultipleSelection));
+            NotifyOfPropertyChange(nameof(HasSelection));
             NotifyOfPropertyChange(nameof(CanHighlightPath));
             UpdateRelationshipHighlighting(); // Reset all dimming
         }
@@ -2464,6 +2479,7 @@ namespace DaxStudio.UI.ViewModels
                 table.IsSelected = true;
             }
             NotifyOfPropertyChange(nameof(HasMultipleSelection));
+            NotifyOfPropertyChange(nameof(HasSelection));
             NotifyOfPropertyChange(nameof(CanHighlightPath));
         }
 
@@ -2508,6 +2524,98 @@ namespace DaxStudio.UI.ViewModels
         }
 
         /// <summary>
+        /// Hides a single table from the diagram.
+        /// </summary>
+        public void HideTable(ModelDiagramTableViewModel table)
+        {
+            if (table != null)
+            {
+                table.IsHidden = true;
+                
+                // Deselect if selected
+                if (_selectedTable == table)
+                {
+                    _selectedTable = null;
+                    NotifyOfPropertyChange(nameof(SelectedTable));
+                }
+                SelectedTables.Remove(table);
+                
+                RefreshLayout();
+            }
+        }
+
+        /// <summary>
+        /// Shows tables that are directly related to the specified table.
+        /// </summary>
+        public void ShowRelatedTables(ModelDiagramTableViewModel table)
+        {
+            if (table == null) return;
+
+            // Find all tables connected via relationships
+            var relatedTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            relatedTables.Add(table.TableName);
+
+            foreach (var rel in Relationships)
+            {
+                if (string.Equals(rel.FromTable, table.TableName, StringComparison.OrdinalIgnoreCase))
+                {
+                    relatedTables.Add(rel.ToTable ?? "");
+                }
+                else if (string.Equals(rel.ToTable, table.TableName, StringComparison.OrdinalIgnoreCase))
+                {
+                    relatedTables.Add(rel.FromTable ?? "");
+                }
+            }
+
+            // Show all related tables
+            foreach (var t in Tables)
+            {
+                if (relatedTables.Contains(t.TableName))
+                {
+                    t.IsHidden = false;
+                }
+            }
+
+            RefreshLayout();
+        }
+
+        /// <summary>
+        /// Hides all tables that are NOT selected, keeping only the selected tables visible.
+        /// </summary>
+        public void HideNonSelectedTables()
+        {
+            var selectedTableNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            
+            // Collect selected table names
+            if (SelectedTables.Count > 0)
+            {
+                foreach (var table in SelectedTables)
+                {
+                    selectedTableNames.Add(table.TableName);
+                }
+            }
+            else if (_selectedTable != null)
+            {
+                selectedTableNames.Add(_selectedTable.TableName);
+            }
+            
+            // Hide all non-selected tables
+            if (selectedTableNames.Count > 0)
+            {
+                foreach (var table in Tables)
+                {
+                    if (!selectedTableNames.Contains(table.TableName))
+                    {
+                        table.IsHidden = true;
+                    }
+                }
+                
+                ClearSelection();
+                RefreshLayout();
+            }
+        }
+
+        /// <summary>
         /// Shows all hidden tables.
         /// </summary>
         public void ShowAllTables()
@@ -2521,6 +2629,113 @@ namespace DaxStudio.UI.ViewModels
             NotifyOfPropertyChange(nameof(TableFilter));
             RefreshLayout();
         }
+
+        #region Annotations
+
+        private ModelDiagramAnnotationViewModel _selectedAnnotation;
+        /// <summary>
+        /// The currently selected annotation.
+        /// </summary>
+        public ModelDiagramAnnotationViewModel SelectedAnnotation
+        {
+            get => _selectedAnnotation;
+            set
+            {
+                if (_selectedAnnotation != null)
+                    _selectedAnnotation.IsSelected = false;
+                _selectedAnnotation = value;
+                if (_selectedAnnotation != null)
+                    _selectedAnnotation.IsSelected = true;
+                NotifyOfPropertyChange();
+            }
+        }
+
+        /// <summary>
+        /// Adds a new annotation at the specified position.
+        /// </summary>
+        public void AddAnnotation(double x, double y)
+        {
+            var annotation = new ModelDiagramAnnotationViewModel
+            {
+                X = x,
+                Y = y,
+                Text = "Double-click to edit",
+                Width = 150,
+                Height = 60
+            };
+            Annotations.Add(annotation);
+            SelectedAnnotation = annotation;
+            annotation.IsEditing = true;
+        }
+
+        /// <summary>
+        /// Adds a new annotation at the center of the visible area.
+        /// Called from context menu.
+        /// </summary>
+        public void AddAnnotationAtCenter()
+        {
+            // Place in visible area - use a reasonable default position
+            double x = 100;
+            double y = 100;
+            
+            // Try to offset from existing annotations to avoid overlap
+            if (Annotations.Count > 0)
+            {
+                var lastAnnotation = Annotations.Last();
+                x = lastAnnotation.X + 20;
+                y = lastAnnotation.Y + 20;
+            }
+            
+            AddAnnotation(x, y);
+        }
+
+        /// <summary>
+        /// Deletes the selected annotation.
+        /// </summary>
+        public void DeleteSelectedAnnotation()
+        {
+            if (_selectedAnnotation != null)
+            {
+                Annotations.Remove(_selectedAnnotation);
+                SelectedAnnotation = null;
+            }
+        }
+
+        /// <summary>
+        /// Deletes a specific annotation.
+        /// </summary>
+        public void DeleteAnnotation(ModelDiagramAnnotationViewModel annotation)
+        {
+            if (annotation != null)
+            {
+                if (_selectedAnnotation == annotation)
+                    SelectedAnnotation = null;
+                Annotations.Remove(annotation);
+            }
+        }
+
+        /// <summary>
+        /// Clears all annotations.
+        /// </summary>
+        public void ClearAllAnnotations()
+        {
+            SelectedAnnotation = null;
+            Annotations.Clear();
+        }
+
+        /// <summary>
+        /// Sets the background color of the specified annotation.
+        /// </summary>
+        public void SetAnnotationColor(ModelDiagramAnnotationViewModel annotation, string color)
+        {
+            if (annotation != null)
+            {
+                annotation.BackgroundColor = color;
+                SaveLayoutAfterDrag();
+            }
+        }
+
+        #endregion
 
         /// <summary>
         /// Highlights the path between two selected tables.
@@ -2627,6 +2842,7 @@ namespace DaxStudio.UI.ViewModels
                 NotifyOfPropertyChange(nameof(SelectedTable));
             }
             NotifyOfPropertyChange(nameof(HasMultipleSelection));
+            NotifyOfPropertyChange(nameof(HasSelection));
             NotifyOfPropertyChange(nameof(CanHighlightPath));
         }
 
@@ -2932,7 +3148,8 @@ namespace DaxStudio.UI.ViewModels
                             IsCollapsed = t.IsCollapsed,
                             ExpandedHeight = t.ExpandedHeight
                         }
-                    )
+                    ),
+                    Annotations = Annotations.Select(a => a.ToData()).ToList()
                 };
 
                 // Update or add
@@ -3007,11 +3224,28 @@ namespace DaxStudio.UI.ViewModels
                     }
                 }
 
+                // Restore annotations
+                if (layoutData.Annotations != null && layoutData.Annotations.Count > 0)
+                {
+                    Annotations.Clear();
+                    foreach (var annotData in layoutData.Annotations)
+                    {
+                        Annotations.Add(new ModelDiagramAnnotationViewModel(annotData));
+                    }
+                }
+
                 if (anyApplied)
                 {
-                    // Calculate canvas size
+                    // Calculate canvas size including annotations
                     var maxX = Tables.Max(t => t.X + t.Width);
                     var maxY = Tables.Max(t => t.Y + t.Height);
+                    
+                    if (Annotations.Count > 0)
+                    {
+                        maxX = Math.Max(maxX, Annotations.Max(a => a.X + a.Width));
+                        maxY = Math.Max(maxY, Annotations.Max(a => a.Y + a.Height));
+                    }
+                    
                     CanvasWidth = Math.Max(100, maxX + 40);
                     CanvasHeight = Math.Max(100, maxY + 40);
 
@@ -4414,6 +4648,7 @@ namespace DaxStudio.UI.ViewModels
         public string ModelKey { get; set; }
         public DateTime LastModified { get; set; }
         public Dictionary<string, TablePosition> TablePositions { get; set; } = new Dictionary<string, TablePosition>();
+        public List<AnnotationData> Annotations { get; set; } = new List<AnnotationData>();
     }
 
     /// <summary>
@@ -4427,6 +4662,155 @@ namespace DaxStudio.UI.ViewModels
         public double Height { get; set; }
         public bool IsCollapsed { get; set; }
         public double ExpandedHeight { get; set; }
+    }
+
+    /// <summary>
+    /// Data for a single annotation.
+    /// </summary>
+    public class AnnotationData
+    {
+        public string Id { get; set; }
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Width { get; set; }
+        public double Height { get; set; }
+        public string Text { get; set; }
+        public string BackgroundColor { get; set; }
+        public double FontSize { get; set; } = 11;
+        public bool IsBold { get; set; }
+        public bool IsItalic { get; set; }
+    }
+
+    #endregion
+
+    #region Annotation ViewModel
+
+    /// <summary>
+    /// ViewModel for a text annotation in the Model Diagram.
+    /// </summary>
+    public class ModelDiagramAnnotationViewModel : PropertyChangedBase
+    {
+        public ModelDiagramAnnotationViewModel()
+        {
+            Id = Guid.NewGuid().ToString("N");
+        }
+
+        public ModelDiagramAnnotationViewModel(AnnotationData data)
+        {
+            Id = data.Id ?? Guid.NewGuid().ToString("N");
+            _x = data.X;
+            _y = data.Y;
+            _width = data.Width > 0 ? data.Width : 150;
+            _height = data.Height > 0 ? data.Height : 60;
+            _text = data.Text ?? "";
+            _backgroundColor = data.BackgroundColor ?? "#FFFDE7"; // Light yellow default
+            _fontSize = data.FontSize > 0 ? data.FontSize : 11;
+            _isBold = data.IsBold;
+            _isItalic = data.IsItalic;
+        }
+
+        public string Id { get; }
+
+        private double _x;
+        public double X
+        {
+            get => _x;
+            set { _x = value; NotifyOfPropertyChange(); }
+        }
+
+        private double _y;
+        public double Y
+        {
+            get => _y;
+            set { _y = value; NotifyOfPropertyChange(); }
+        }
+
+        private double _width = 150;
+        public double Width
+        {
+            get => _width;
+            set { _width = Math.Max(80, value); NotifyOfPropertyChange(); }
+        }
+
+        private double _height = 60;
+        public double Height
+        {
+            get => _height;
+            set { _height = Math.Max(30, value); NotifyOfPropertyChange(); }
+        }
+
+        private string _text = "";
+        public string Text
+        {
+            get => _text;
+            set { _text = value; NotifyOfPropertyChange(); }
+        }
+
+        private string _backgroundColor = "#FFFDE7"; // Light yellow
+        public string BackgroundColor
+        {
+            get => _backgroundColor;
+            set { _backgroundColor = value; NotifyOfPropertyChange(); }
+        }
+
+        private bool _isSelected;
+        public bool IsSelected
+        {
+            get => _isSelected;
+            set { _isSelected = value; NotifyOfPropertyChange(); }
+        }
+
+        private bool _isEditing;
+        public bool IsEditing
+        {
+            get => _isEditing;
+            set { _isEditing = value; NotifyOfPropertyChange(); }
+        }
+
+        private double _fontSize = 11;
+        public double FontSize
+        {
+            get => _fontSize;
+            set { _fontSize = value; NotifyOfPropertyChange(); }
+        }
+
+        private bool _isBold;
+        public bool IsBold
+        {
+            get => _isBold;
+            set { _isBold = value; NotifyOfPropertyChange(); NotifyOfPropertyChange(nameof(FontWeight)); }
+        }
+
+        public System.Windows.FontWeight FontWeight => _isBold ? System.Windows.FontWeights.Bold : System.Windows.FontWeights.Normal;
+
+        private bool _isItalic;
+        public bool IsItalic
+        {
+            get => _isItalic;
+            set { _isItalic = value; NotifyOfPropertyChange(); NotifyOfPropertyChange(nameof(FontStyle)); }
+        }
+
+        public System.Windows.FontStyle FontStyle => _isItalic ? System.Windows.FontStyles.Italic : System.Windows.FontStyles.Normal;
+
+        /// <summary>
+        /// Converts this annotation to persistence data.
+        /// </summary>
+        public AnnotationData ToData()
+        {
+            return new AnnotationData
+            {
+                Id = Id,
+                X = X,
+                Y = Y,
+                Width = Width,
+                Height = Height,
+                Text = Text,
+                BackgroundColor = BackgroundColor,
+                FontSize = FontSize,
+                IsBold = IsBold,
+                IsItalic = IsItalic
+            };
+        }
     }
 
     #endregion
