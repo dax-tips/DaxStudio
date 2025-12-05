@@ -151,7 +151,7 @@
                                            VerticalAlignment="Center"
                                            ToolTip="{Binding TableName}"/>
                                 
-                                <!-- Column/Measure Count -->
+                                <!-- Column/Measure/Relationship Count -->
                                 <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="4,0,0,0">
                                     <Border Background="White"
                                             CornerRadius="8"
@@ -184,11 +184,29 @@
                                                        Margin="2,0,0,0"/>
                                         </StackPanel>
                                     </Border>
+                                    <!-- Relationship Count Badge -->
+                                    <Border Background="#E3F2FD"
+                                            CornerRadius="8"
+                                            Padding="4,1"
+                                            Margin="4,0,0,0"
+                                            Opacity="0.9"
+                                            VerticalAlignment="Center"
+                                            ToolTip="Number of relationships"
+                                            Visibility="{Binding RelationshipCount, Converter={StaticResource BoolToCollapsedConverter}}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="🔗" FontSize="9"/>
+                                            <TextBlock Text="{Binding RelationshipCount}"
+                                                       FontSize="10"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="#1565C0"
+                                                       Margin="2,0,0,0"/>
+                                        </StackPanel>
+                                    </Border>
                                 </StackPanel>
                             </Grid>
                         </Border>
                         
-                        <!-- Date Table / Hidden indicator -->
+                        <!-- Date Table / Field Parameter / Private / Hidden indicators -->
                         <Border Grid.Row="1"
                                 Padding="8,2"
                                 Background="{DynamicResource Theme.Brush.MenuBar.Back}">
@@ -202,6 +220,21 @@
                                         <DataTrigger Binding="{Binding IsVisible}" Value="False">
                                             <Setter Property="Visibility" Value="Visible"/>
                                         </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsFieldParameterTable}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsCalculationGroup}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsPrivate}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsMeasureOnlyTable}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding HasHierarchies}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </Border.Style>
@@ -210,6 +243,7 @@
                                            Foreground="#4CAF50"
                                            Visibility="{Binding IsDateTable, Converter={StaticResource BoolToCollapsedConverter}}"
                                            VerticalAlignment="Center"/>
+                                <!-- Separator after Date Table -->
                                 <TextBlock Text="  |  " FontSize="10" 
                                            Foreground="{DynamicResource Theme.Brush.Default.Fore}"
                                            VerticalAlignment="Center">
@@ -228,6 +262,46 @@
                                         </Style>
                                     </TextBlock.Style>
                                 </TextBlock>
+                                <!-- Field Parameter Table Indicator -->
+                                <TextBlock Text="⚡ Field Parameter" FontSize="10" 
+                                           Foreground="#FF9800"
+                                           Visibility="{Binding IsFieldParameterTable, Converter={StaticResource BoolToCollapsedConverter}}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,4,0"
+                                           ToolTip="This is a Field Parameter table"/>
+                                <!-- Calculation Group Indicator -->
+                                <TextBlock Text="🧮 Calc Group" FontSize="10" 
+                                           Foreground="#673AB7"
+                                           Visibility="{Binding IsCalculationGroup, Converter={StaticResource BoolToCollapsedConverter}}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,4,0"
+                                           ToolTip="This is a Calculation Group table"/>
+                                <!-- Measure-Only Table Indicator -->
+                                <TextBlock Text="📊 Measures Only" FontSize="10" 
+                                           Foreground="#9C27B0"
+                                           Visibility="{Binding IsMeasureOnlyTable, Converter={StaticResource BoolToCollapsedConverter}}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,4,0"
+                                           ToolTip="This table contains only measures (no data columns)"/>
+                                <!-- Hierarchy Indicator -->
+                                <TextBlock FontSize="10" 
+                                           Foreground="#00BCD4"
+                                           Visibility="{Binding HasHierarchies, Converter={StaticResource BoolToCollapsedConverter}}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,4,0"
+                                           ToolTip="This table contains hierarchies">
+                                    <Run Text="🏛️"/>
+                                    <Run Text="{Binding HierarchyCount, Mode=OneWay}"/>
+                                    <Run Text=" Hierarchies"/>
+                                </TextBlock>
+                                <!-- Private Table Indicator -->
+                                <TextBlock Text="🔒 Private" FontSize="10" 
+                                           Foreground="#607D8B"
+                                           Visibility="{Binding IsPrivate, Converter={StaticResource BoolToCollapsedConverter}}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,4,0"
+                                           ToolTip="This table is marked as private"/>
+                                <!-- Hidden Indicator -->
                                 <TextBlock Text="👁 Hidden" FontSize="10" 
                                            Foreground="#9E9E9E"
                                            VerticalAlignment="Center">
@@ -339,29 +413,44 @@
                                                     </Style>
                                                 </Border.Style>
                                                 <Grid>
+                                                    <Grid.Style>
+                                                        <Style TargetType="Grid">
+                                                            <Setter Property="Margin" Value="0"/>
+                                                            <Style.Triggers>
+                                                                <!-- Indent hierarchy level columns -->
+                                                                <DataTrigger Binding="{Binding IsHierarchyLevel}" Value="True">
+                                                                    <Setter Property="Margin" Value="12,0,0,0"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Grid.Style>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="Auto"/>
-                                                        <ColumnDefinition Width="Auto"/>
                                                         <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
                                                     
-                                                    <!-- Key Indicator -->
-                                                    <TextBlock Grid.Column="0"
-                                                               Text="🔑"
-                                                               FontSize="10"
-                                                               VerticalAlignment="Center"
-                                                               Margin="0,0,2,0"
-                                                               Visibility="{Binding IsKey, Converter={StaticResource BoolToVisibilityConverter}}"/>
-                                                    
-                                                    <!-- Column Type Icon -->
-                                                    <Image Grid.Column="1"
-                                                           ap:ImageBindingHelper.SourceResourceKey="{Binding IconResourceKey}"
-                                                           Width="14" Height="14"
-                                                           VerticalAlignment="Center"
-                                                           Margin="0,0,4,0"/>
+                                                    <!-- Column Type Icon with Key Indicator -->
+                                                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,0">
+                                                        <TextBlock Text="🔑"
+                                                                   FontSize="10"
+                                                                   VerticalAlignment="Center"
+                                                                   Margin="0,0,2,0"
+                                                                   Visibility="{Binding IsKey, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                                        <!-- Hierarchy level indicator -->
+                                                        <TextBlock Text="└"
+                                                                   FontSize="10"
+                                                                   VerticalAlignment="Center"
+                                                                   Margin="0,0,2,0"
+                                                                   Foreground="#9C27B0"
+                                                                   Visibility="{Binding IsHierarchyLevel, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                                        <Image ap:ImageBindingHelper.SourceResourceKey="{Binding IconResourceKey}"
+                                                               Width="14" Height="14"
+                                                               VerticalAlignment="Center"/>
+                                                    </StackPanel>
                                                     
                                                     <!-- Column Name -->
-                                                    <TextBlock Grid.Column="2"
+                                                    <TextBlock Grid.Column="1"
                                                                Text="{Binding Caption}"
                                                                FontSize="11"
                                                                TextTrimming="CharacterEllipsis"
@@ -381,6 +470,16 @@
                                                             </Style>
                                                         </TextBlock.Style>
                                                     </TextBlock>
+                                                    
+                                                    <!-- Sort By Column Indicator -->
+                                                    <TextBlock Grid.Column="2"
+                                                               Text="↕"
+                                                               FontSize="10"
+                                                               VerticalAlignment="Center"
+                                                               Margin="4,0,2,0"
+                                                               Foreground="#FF9800"
+                                                               ToolTip="{Binding SortByColumnName, StringFormat='Sorted by: {0}'}"
+                                                               Visibility="{Binding HasSortByColumn, Converter={StaticResource BoolToVisibilityConverter}}"/>
                                                 </Grid>
                                             </Border>
                                         </DataTemplate>
@@ -497,6 +596,10 @@
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding IsManyToMany}" Value="True">
                                         <Setter Property="Stroke" Value="#E91E63"/>
+                                    </DataTrigger>
+                                    <!-- Bi-directional relationships get a distinct teal color -->
+                                    <DataTrigger Binding="{Binding IsBidirectional}" Value="True">
+                                        <Setter Property="Stroke" Value="#00897B"/>
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>

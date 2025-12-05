@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Windows;
@@ -120,7 +121,9 @@ namespace DaxStudio.UI.Views
                 if (DataContext is ModelDiagramViewModel vm)
                 {
                     var factor = e.Delta / 1200.0;
-                    vm.Scale += factor;
+                    var newScale = vm.Scale + factor;
+                    // Clamp scale between 10% and 200%
+                    vm.Scale = Math.Max(0.1, Math.Min(2.0, newScale));
                     e.Handled = true;
                 }
             }

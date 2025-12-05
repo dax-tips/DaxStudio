@@ -906,12 +906,23 @@ namespace DaxStudio.UI.ViewModels
                     columnDicts[tableVm.TableName] = tableVm.Columns.ToDictionary(c => c.ColumnName, StringComparer.OrdinalIgnoreCase);
                 }
 
+                // Track relationship counts per table
+                var relationshipCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (var tableVm in tableVms)
+                {
+                    relationshipCounts[tableVm.TableName] = 0;
+                }
+
                 var relationshipVms = new List<ModelDiagramRelationshipViewModel>(relationshipData.Count / 2);
                 var processedRelationships = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                 foreach (var (rel, fromTableName, fromColumn, toTableName, toColumn) in relationshipData)
                 {
-                    var relKey = $"{fromTableName}|{fromColumn}|{toTableName}|{toColumn}";
+                    // Create a normalized key that handles potential duplicates
+                    // Sort table names to ensure same relationship found from either table produces same key
+                    var relKey = string.Compare(fromTableName, toTableName, StringComparison.OrdinalIgnoreCase) <= 0
+                        ? $"{fromTableName}|{fromColumn}|{toTableName}|{toColumn}"
+                        : $"{toTableName}|{toColumn}|{fromTableName}|{fromColumn}";
                     if (processedRelationships.Contains(relKey)) continue;
                     processedRelationships.Add(relKey);
 
@@ -923,6 +934,10 @@ namespace DaxStudio.UI.ViewModels
                         var relVm = new ModelDiagramRelationshipViewModel(rel, fromTableVm, toTableVm);
                         relationshipVms.Add(relVm);
 
+                        // Increment relationship counts
+                        relationshipCounts[fromTableName]++;
+                        relationshipCounts[toTableName]++;
+
                         if (columnDicts.TryGetValue(fromTableName, out var fromColDict) &&
                             fromColDict.TryGetValue(fromColumn, out var fromCol))
                         {
@@ -933,6 +948,15 @@ namespace DaxStudio.UI.ViewModels
                         {
                             toCol.IsRelationshipColumn = true;
                         }
+                    }
+                }
+
+                // Apply relationship counts to tables
+                foreach (var tableVm in tableVms)
+                {
+                    if (relationshipCounts.TryGetValue(tableVm.TableName, out var count))
+                    {
+                        tableVm.RelationshipCount = count;
                     }
                 }
 
@@ -1433,8 +1457,13 @@ namespace DaxStudio.UI.ViewModels
                 {
                     foreach (var rel in table.Relationships)
                     {
-                        // Create a unique key to avoid duplicates (relationships appear on both ends)
-                        var relKey = $"{rel.FromTable?.Name}|{rel.FromColumn}|{rel.ToTable?.Name}|{rel.ToColumn}";
+                        // Create a normalized key to avoid duplicates (relationships appear on both ends)
+                        // Sort table names to ensure same relationship found from either table produces same key
+                        var fromName = rel.FromTable?.Name ?? "";
+                        var toName = rel.ToTable?.Name ?? "";
+                        var relKey = string.Compare(fromName, toName, StringComparison.OrdinalIgnoreCase) <= 0
+                            ? $"{fromName}|{rel.FromColumn}|{toName}|{rel.ToColumn}"
+                            : $"{toName}|{rel.ToColumn}|{fromName}|{rel.FromColumn}";
                         if (processedRelationships.Contains(relKey)) continue;
                         processedRelationships.Add(relKey);
 
@@ -1445,6 +1474,10 @@ namespace DaxStudio.UI.ViewModels
                         {
                             var relVm = new ModelDiagramRelationshipViewModel(rel, fromTableVm, toTableVm);
                             Relationships.Add(relVm);
+
+                            // Track relationship count for each table
+                            fromTableVm.RelationshipCount++;
+                            toTableVm.RelationshipCount++;
 
                             // Mark columns as relationship columns
                             var fromCol = fromTableVm.Columns.FirstOrDefault(c => c.ColumnName == rel.FromColumn);
@@ -3477,6 +3510,7 @@ namespace DaxStudio.UI.ViewModels
         /// Gets columns sorted based on the current sort setting.
         /// Note: IsRelationshipColumn is NOT set here during initial load - it's set later
         /// by the relationship processing loop for much better performance.
+        /// Hierarchy levels are shown indented under their parent hierarchy.
         /// </summary>
         private IEnumerable<ModelDiagramColumnViewModel> GetSortedColumns()
         {
@@ -3500,7 +3534,45 @@ namespace DaxStudio.UI.ViewModels
             }
 
             // Create ViewModels - IsRelationshipColumn will be set later by relationship processing
-            return sorted.Select(c => new ModelDiagramColumnViewModel(c, _metadataProvider, _options));
+            // For hierarchies, also add the hierarchy levels as indented children
+            // First, collect all column names that are used in hierarchy levels so we can exclude them from main list
+            var hierarchyLevelColumnNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var col in sorted)
+            {
+                if (col is ADOTabularHierarchy hierarchy && hierarchy.Levels != null)
+                {
+                    foreach (var level in hierarchy.Levels)
+                    {
+                        hierarchyLevelColumnNames.Add(level.Column.Name);
+                    }
+                }
+            }
+
+            var result = new List<ModelDiagramColumnViewModel>();
+            foreach (var col in sorted)
+            {
+                // Skip columns that will appear as hierarchy levels (to avoid duplicates like Date)
+                if (hierarchyLevelColumnNames.Contains(col.Name) && 
+                    col.ObjectType != ADOTabularObjectType.Hierarchy && 
+                    col.ObjectType != ADOTabularObjectType.UnnaturalHierarchy)
+                {
+                    continue;
+                }
+
+                result.Add(new ModelDiagramColumnViewModel(col, _metadataProvider, _options));
+                
+                // If this is a hierarchy, add its levels as indented children
+                if (col is ADOTabularHierarchy hierarchy && hierarchy.Levels != null)
+                {
+                    foreach (var level in hierarchy.Levels)
+                    {
+                        // Create a column VM for the level, marked as a hierarchy level
+                        result.Add(new ModelDiagramColumnViewModel(level.Column, _metadataProvider, _options, 
+                            isHierarchyLevel: true, hierarchyLevelName: level.Caption));
+                    }
+                }
+            }
+            return result;
         }
 
         /// <summary>
@@ -3556,8 +3628,75 @@ namespace DaxStudio.UI.ViewModels
         public string Description => _table.Description;
         public bool IsVisible => _table.IsVisible;
         public bool IsDateTable => _table.IsDateTable;
+        public string DataCategory => _table.DataCategory;
         public int ColumnCount => Columns.Count(c => c.ObjectType == ADOTabularObjectType.Column);
         public int MeasureCount => Columns.Count(c => c.ObjectType == ADOTabularObjectType.Measure);
+        public int HierarchyCount => Columns.Count(c => c.IsHierarchy);
+
+        /// <summary>
+        /// Whether this table has any hierarchies.
+        /// </summary>
+        public bool HasHierarchies => HierarchyCount > 0;
+
+        /// <summary>
+        /// Whether this is a "measure table" (contains only measures, no data columns).
+        /// Alias for IsMeasureTable for XAML binding compatibility.
+        /// </summary>
+        public bool IsMeasureOnlyTable => MeasureCount > 0 && ColumnCount == 0;
+
+        /// <summary>
+        /// Whether this is a "measure table" (contains only measures, no data columns).
+        /// </summary>
+        public bool IsMeasureTable => MeasureCount > 0 && ColumnCount == 0;
+
+        /// <summary>
+        /// Whether this table is marked as private.
+        /// </summary>
+        public bool IsPrivate => _table.Private;
+
+        /// <summary>
+        /// Whether this table is a Field Parameter table (ShowAsVariationsOnly).
+        /// </summary>
+        public bool IsFieldParameterTable => _table.ShowAsVariationsOnly;
+
+        /// <summary>
+        /// Whether this table has field parameters (variations) - checks columns.
+        /// </summary>
+        public bool HasFieldParameters => _table.ShowAsVariationsOnly || _table.Columns.Any(c => c.Variations != null && c.Variations.Count > 0);
+
+        /// <summary>
+        /// Whether this table is a Calculation Group (has calculation items).
+        /// Calculation groups typically have only a single column (the Name column) plus measures.
+        /// </summary>
+        public bool IsCalculationGroup => !string.IsNullOrEmpty(_table.DataCategory) && 
+                                          _table.DataCategory.Equals("CalculationGroup", StringComparison.OrdinalIgnoreCase);
+
+        private int _relationshipCount;
+        /// <summary>
+        /// Number of relationships this table participates in.
+        /// Set during relationship processing.
+        /// </summary>
+        public int RelationshipCount
+        {
+            get => _relationshipCount;
+            set 
+            { 
+                _relationshipCount = value; 
+                NotifyOfPropertyChange();
+                NotifyOfPropertyChange(nameof(IsHubTable));
+                NotifyOfPropertyChange(nameof(IsLeafTable));
+            }
+        }
+
+        /// <summary>
+        /// Whether this is a "hub" table (many relationships, likely a dimension).
+        /// </summary>
+        public bool IsHubTable => RelationshipCount >= 3;
+
+        /// <summary>
+        /// Whether this is a "leaf" table (0-1 relationships, likely a fact or standalone).
+        /// </summary>
+        public bool IsLeafTable => RelationshipCount <= 1 && !IsMeasureTable;
 
         private bool _isHidden;
         /// <summary>
@@ -3640,10 +3779,24 @@ namespace DaxStudio.UI.ViewModels
                 
                 sb.AppendLine($"Columns: {ColumnCount}");
                 sb.AppendLine($"Measures: {MeasureCount}");
+                if (HierarchyCount > 0)
+                    sb.AppendLine($"Hierarchies: {HierarchyCount}");
+                sb.AppendLine($"Relationships: {RelationshipCount}");
                 
+                // Table type indicators
                 if (IsDateTable)
                     sb.AppendLine("📅 Date Table");
+                if (IsFieldParameterTable)
+                    sb.AppendLine("⚡ Field Parameter Table");
+                if (IsCalculationGroup)
+                    sb.AppendLine("🧮 Calculation Group");
+                if (IsMeasureTable)
+                    sb.AppendLine("📊 Measure Table");
+                if (!string.IsNullOrEmpty(DataCategory) && DataCategory != "Time" && DataCategory != "CalculationGroup")
+                    sb.AppendLine($"Category: {DataCategory}");
                     
+                if (IsPrivate)
+                    sb.AppendLine("🔒 Private");
                 if (!IsVisible)
                     sb.AppendLine("👁 Hidden");
                     
@@ -3659,7 +3812,8 @@ namespace DaxStudio.UI.ViewModels
 
         /// <summary>
         /// Header background color based on table type.
-        /// </summary>
+        /// Keeping it simple - Date Tables are green, hidden tables are gray, everything else is blue.
+        /// Colors reserved for future storage mode visualization.
         /// </summary>
         public string HeaderColor
         {
@@ -3667,10 +3821,30 @@ namespace DaxStudio.UI.ViewModels
             {
                 if (IsDateTable) return "#4CAF50"; // Green for date tables
                 if (!IsVisible) return "#9E9E9E"; // Gray for hidden tables
-                if (MeasureCount > 0 && ColumnCount == 0) return "#9C27B0"; // Purple for measure tables
                 return "#2196F3"; // Blue default
             }
         }
+
+        /// <summary>
+        /// Icon to show in the table header based on table type.
+        /// </summary>
+        public string TableTypeIcon
+        {
+            get
+            {
+                if (IsDateTable) return "📅";
+                if (IsMeasureTable) return "📊";
+                if (HasFieldParameters) return "🔀";
+                if (IsHubTable) return "⭐";
+                if (IsLeafTable && RelationshipCount == 0) return "📄"; // Standalone/calculated table
+                return "";
+            }
+        }
+
+        /// <summary>
+        /// Whether the table has a type icon to display.
+        /// </summary>
+        public bool HasTableTypeIcon => !string.IsNullOrEmpty(TableTypeIcon);
 
         #region Position Properties
 
@@ -3879,13 +4053,25 @@ namespace DaxStudio.UI.ViewModels
         private bool _sampleDataLoadFailed; // Prevent retrying on error
         private const int SAMPLE_ROWS = 10;
 
-        public ModelDiagramColumnViewModel(ADOTabularColumn column, IMetadataProvider metadataProvider, IGlobalOptions options)
+        public ModelDiagramColumnViewModel(ADOTabularColumn column, IMetadataProvider metadataProvider, IGlobalOptions options, bool isHierarchyLevel = false, string hierarchyLevelName = null)
         {
             _column = column;
             _metadataProvider = metadataProvider;
             _options = options;
             _sampleData = new List<string>();
+            IsHierarchyLevel = isHierarchyLevel;
+            HierarchyLevelName = hierarchyLevelName;
         }
+
+        /// <summary>
+        /// Whether this column represents a level within a hierarchy (should be indented).
+        /// </summary>
+        public bool IsHierarchyLevel { get; }
+
+        /// <summary>
+        /// The display name for this hierarchy level (if IsHierarchyLevel is true).
+        /// </summary>
+        public string HierarchyLevelName { get; }
 
         public string ColumnName => _column.Name;
         public string Caption => _column.Caption;
@@ -3894,6 +4080,26 @@ namespace DaxStudio.UI.ViewModels
         public ADOTabularObjectType ObjectType => _column.ObjectType;
         public string DataTypeName => _column.DataTypeName;
         public bool IsKey => _column.IsKey;
+
+        /// <summary>
+        /// Whether this column has a "Sort By" column defined.
+        /// </summary>
+        public bool HasSortByColumn => _column.OrderBy != null;
+
+        /// <summary>
+        /// The name of the column this is sorted by (if any).
+        /// </summary>
+        public string SortByColumnName => _column.OrderBy?.Name;
+
+        /// <summary>
+        /// Whether this column has variations (field parameters).
+        /// </summary>
+        public bool HasVariations => _column.Variations != null && _column.Variations.Count > 0;
+
+        /// <summary>
+        /// The measure expression (for measures only).
+        /// </summary>
+        public string MeasureExpression => _column.MeasureExpression;
         
         private bool _isRelationshipColumn;
         /// <summary>
@@ -4020,6 +4226,8 @@ namespace DaxStudio.UI.ViewModels
                 
                 if (IsKey) 
                     sb.AppendLine("🔑 Key Column");
+                if (IsRelationshipColumn && !IsKey)
+                    sb.AppendLine("🔗 Relationship Column");
                     
                 if (IsMeasure) 
                     sb.AppendLine("📊 Measure");
@@ -4035,6 +4243,14 @@ namespace DaxStudio.UI.ViewModels
                 if (!string.IsNullOrEmpty(FormatString))
                     sb.AppendLine($"Format: {FormatString}");
                 
+                // Sort by column indicator
+                if (HasSortByColumn)
+                    sb.AppendLine($"↕️ Sorted by: {SortByColumnName}");
+                
+                // Field parameter indicator
+                if (HasVariations)
+                    sb.AppendLine("🔀 Field Parameter");
+                
                 // Add statistics from metadata (like the metadata pane tooltip)
                 if (!IsMeasure && !IsHierarchy)
                 {
@@ -4046,6 +4262,16 @@ namespace DaxStudio.UI.ViewModels
                     
                     if (!string.IsNullOrEmpty(MaxValue))
                         sb.AppendLine($"Max Value: {MaxValue}");
+                }
+                
+                // Add measure expression preview (first 100 chars)
+                if (IsMeasure && !string.IsNullOrEmpty(MeasureExpression))
+                {
+                    sb.AppendLine();
+                    var expr = MeasureExpression.Length > 100 
+                        ? MeasureExpression.Substring(0, 100) + "..." 
+                        : MeasureExpression;
+                    sb.AppendLine($"Expression: {expr}");
                 }
                 
                 // Add sample data if available and enabled
