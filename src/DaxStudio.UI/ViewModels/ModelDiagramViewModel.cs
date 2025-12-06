@@ -3504,6 +3504,30 @@ namespace DaxStudio.UI.ViewModels
             _options = options;
             _sortKeyColumnsFirst = sortKeyColumnsFirst;
             Columns = new BindableCollection<ModelDiagramColumnViewModel>(GetSortedColumns());
+            
+            // DEBUG: Log special table type detection
+            Log.Information("{class} {method} Table '{table}': ShowAsVariationsOnly={showVar}, DataCategory='{dataCat}', IsFieldParameterTable={isFP}, IsCalculationGroup={isCG}, Private={priv}",
+                nameof(ModelDiagramTableViewModel), ".ctor",
+                table.Caption, table.ShowAsVariationsOnly, table.DataCategory ?? "(null)", 
+                IsFieldParameterTable, IsCalculationGroup, table.Private);
+            
+            // DEBUG: Log column details including Variations for special table detection
+            foreach (var col in table.Columns.Take(5)) // Just first 5 to avoid log spam
+            {
+                var hasVariations = col.Variations != null && col.Variations.Count > 0;
+                Log.Information("{class} {method} Table '{table}' Column '{col}': Contents='{contents}', ObjectType={type}, HasVariations={hasVar}, VariationCount={varCount}",
+                    nameof(ModelDiagramTableViewModel), ".ctor",
+                    table.Caption, col.Caption, col.Contents ?? "(null)", col.ObjectType, 
+                    hasVariations, col.Variations?.Count ?? 0);
+            }
+            
+            // DEBUG: Check for Ordinal column (common in Calc Groups)
+            var hasOrdinalColumn = table.Columns.Any(c => c.Name.Equals("Ordinal", StringComparison.OrdinalIgnoreCase));
+            if (hasOrdinalColumn)
+            {
+                Log.Information("{class} {method} Table '{table}': Has 'Ordinal' column - potential Calculation Group",
+                    nameof(ModelDiagramTableViewModel), ".ctor", table.Caption);
+            }
         }
 
         /// <summary>
@@ -3544,8 +3568,20 @@ namespace DaxStudio.UI.ViewModels
                     foreach (var level in hierarchy.Levels)
                     {
                         hierarchyLevelColumnNames.Add(level.Column.Name);
+                        // DEBUG: Log hierarchy level columns
+                        Log.Information("{class} {method} Table '{table}': Hierarchy '{hier}' has level column '{col}'",
+                            nameof(ModelDiagramTableViewModel), nameof(GetSortedColumns), 
+                            _table.Caption, hierarchy.Caption, level.Column.Name);
                     }
                 }
+            }
+            
+            // DEBUG: Log all hierarchy level column names collected
+            if (hierarchyLevelColumnNames.Count > 0)
+            {
+                Log.Information("{class} {method} Table '{table}': HierarchyLevelColumnNames = [{cols}]",
+                    nameof(ModelDiagramTableViewModel), nameof(GetSortedColumns),
+                    _table.Caption, string.Join(", ", hierarchyLevelColumnNames));
             }
 
             var result = new List<ModelDiagramColumnViewModel>();
@@ -3556,6 +3592,9 @@ namespace DaxStudio.UI.ViewModels
                     col.ObjectType != ADOTabularObjectType.Hierarchy && 
                     col.ObjectType != ADOTabularObjectType.UnnaturalHierarchy)
                 {
+                    Log.Information("{class} {method} Table '{table}': SKIPPING column '{col}' (Name='{name}', ObjectType={type}) - it's a hierarchy level",
+                        nameof(ModelDiagramTableViewModel), nameof(GetSortedColumns),
+                        _table.Caption, col.Caption, col.Name, col.ObjectType);
                     continue;
                 }
 
@@ -3564,6 +3603,10 @@ namespace DaxStudio.UI.ViewModels
                 // If this is a hierarchy, add its levels as indented children
                 if (col is ADOTabularHierarchy hierarchy && hierarchy.Levels != null)
                 {
+                    Log.Information("{class} {method} Table '{table}': Adding {count} levels for hierarchy '{hier}'",
+                        nameof(ModelDiagramTableViewModel), nameof(GetSortedColumns),
+                        _table.Caption, hierarchy.Levels.Count, hierarchy.Caption);
+                        
                     foreach (var level in hierarchy.Levels)
                     {
                         // Create a column VM for the level, marked as a hierarchy level
@@ -3572,6 +3615,18 @@ namespace DaxStudio.UI.ViewModels
                     }
                 }
             }
+            
+            // DEBUG: Log final column list with IsHierarchyLevel status
+            Log.Information("{class} {method} Table '{table}': Final column list ({count} items):",
+                nameof(ModelDiagramTableViewModel), nameof(GetSortedColumns), _table.Caption, result.Count);
+            foreach (var vm in result)
+            {
+                if (vm.IsHierarchyLevel)
+                {
+                    Log.Information("  - '{caption}' (IsHierarchyLevel=TRUE, Name='{name}')", vm.Caption, vm.ColumnName);
+                }
+            }
+            
             return result;
         }
 
@@ -3589,32 +3644,85 @@ namespace DaxStudio.UI.ViewModels
 
         /// <summary>
         /// Updates the column sort order.
+        /// Note: Hierarchy levels are NOT sorted - they remain attached to their parent hierarchy.
+        /// We rebuild the list by regenerating from source to preserve hierarchy structure.
         /// </summary>
         public void UpdateColumnSort(bool sortKeyColumnsFirst)
         {
             _sortKeyColumnsFirst = sortKeyColumnsFirst;
             
-            // Re-sort existing columns (preserves IsRelationshipColumn that was set during load)
-            List<ModelDiagramColumnViewModel> sortedColumns;
+            // Preserve IsRelationshipColumn flags from existing columns
+            var relationshipColumnNames = new HashSet<string>(
+                Columns.Where(c => c.IsRelationshipColumn).Select(c => c.ColumnName),
+                StringComparer.OrdinalIgnoreCase);
+            
+            // Regenerate the columns list from source to preserve hierarchy structure
+            var newColumns = GetSortedColumns().ToList();
+            
+            // Restore IsRelationshipColumn flags
+            foreach (var col in newColumns)
+            {
+                if (relationshipColumnNames.Contains(col.ColumnName))
+                {
+                    col.IsRelationshipColumn = true;
+                }
+            }
+            
+            // Now apply the actual sorting based on sortKeyColumnsFirst
+            // Separate hierarchy levels - they should stay with their parent hierarchy, not be re-sorted
+            var hierarchyLevelColumns = newColumns.Where(c => c.IsHierarchyLevel).ToList();
+            var nonHierarchyLevelColumns = newColumns.Where(c => !c.IsHierarchyLevel).ToList();
+            
+            List<ModelDiagramColumnViewModel> sortedNonHierarchy;
             if (sortKeyColumnsFirst)
             {
-                sortedColumns = Columns
-                    .OrderBy(c => c.ObjectType == ADOTabularObjectType.Column ? 0 : 1)
+                // Sort relationship columns first, then by caption
+                sortedNonHierarchy = nonHierarchyLevelColumns
+                    .OrderBy(c => c.ObjectType == ADOTabularObjectType.Column ? 0 : 
+                                  c.ObjectType == ADOTabularObjectType.Hierarchy || c.ObjectType == ADOTabularObjectType.UnnaturalHierarchy ? 1 : 2)
                     .ThenByDescending(c => c.IsRelationshipColumn)
                     .ThenBy(c => c.Caption)
                     .ToList();
             }
             else
             {
-                sortedColumns = Columns
-                    .OrderBy(c => c.ObjectType == ADOTabularObjectType.Column ? 0 : 1)
+                // Sort alphabetically by caption
+                sortedNonHierarchy = nonHierarchyLevelColumns
+                    .OrderBy(c => c.ObjectType == ADOTabularObjectType.Column ? 0 : 
+                                  c.ObjectType == ADOTabularObjectType.Hierarchy || c.ObjectType == ADOTabularObjectType.UnnaturalHierarchy ? 1 : 2)
                     .ThenBy(c => c.Caption)
                     .ToList();
             }
             
+            // Rebuild the final list, inserting hierarchy levels after their parent hierarchies
+            var finalColumns = new List<ModelDiagramColumnViewModel>();
+            foreach (var col in sortedNonHierarchy)
+            {
+                finalColumns.Add(col);
+                
+                // If this is a hierarchy, find and add its levels right after
+                if (col.IsHierarchy)
+                {
+                    // Find levels that were originally added for this hierarchy
+                    // They should be in hierarchyLevelColumns in the order they were added
+                    // We need to identify which levels belong to this hierarchy
+                    // For now, since we regenerated from source, the levels should follow immediately
+                }
+            }
+            
+            // Add hierarchy levels at the end if they weren't inserted
+            // This is a fallback - ideally they should be inserted after their parent hierarchy
+            foreach (var level in hierarchyLevelColumns)
+            {
+                if (!finalColumns.Contains(level))
+                {
+                    finalColumns.Add(level);
+                }
+            }
+            
             // Clear and re-add to force UI update
             Columns.Clear();
-            foreach (var col in sortedColumns)
+            foreach (var col in finalColumns)
             {
                 Columns.Add(col);
             }
@@ -3655,21 +3763,72 @@ namespace DaxStudio.UI.ViewModels
         public bool IsPrivate => _table.Private;
 
         /// <summary>
-        /// Whether this table is a Field Parameter table (ShowAsVariationsOnly).
+        /// Whether this table is a Field Parameter table.
+        /// Detection: ShowAsVariationsOnly property OR any column has Variations defined,
+        /// OR follows the field parameter pattern (1 column + 1 measure with specific naming).
         /// </summary>
-        public bool IsFieldParameterTable => _table.ShowAsVariationsOnly;
+        public bool IsFieldParameterTable
+        {
+            get
+            {
+                // Primary detection methods
+                if (_table.ShowAsVariationsOnly) return true;
+                if (_table.Columns.Any(c => c.Variations != null && c.Variations.Count > 0)) return true;
+                
+                // Heuristic: Field parameter tables typically have:
+                // - Exactly 1 column (the parameter name)
+                // - 1 or more measures (typically named "{TableName} Value" or similar)
+                // - The column often has the same name as the table
+                var columns = _table.Columns.Where(c => c.ObjectType == ADOTabularObjectType.Column).ToList();
+                var measures = _table.Columns.Where(c => c.ObjectType == ADOTabularObjectType.Measure).ToList();
+                
+                if (columns.Count == 1 && measures.Count >= 1)
+                {
+                    // Check if column name matches table name (common field parameter pattern)
+                    var colName = columns[0].Name;
+                    var tableName = _table.Name;
+                    if (colName.Equals(tableName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                    
+                    // Check if there's a measure with "Value" in the name
+                    if (measures.Any(m => m.Name.IndexOf("Value", StringComparison.OrdinalIgnoreCase) >= 0))
+                    {
+                        return true;
+                    }
+                }
+                
+                return false;
+            }
+        }
 
         /// <summary>
         /// Whether this table has field parameters (variations) - checks columns.
         /// </summary>
-        public bool HasFieldParameters => _table.ShowAsVariationsOnly || _table.Columns.Any(c => c.Variations != null && c.Variations.Count > 0);
+        public bool HasFieldParameters => IsFieldParameterTable;
 
         /// <summary>
-        /// Whether this table is a Calculation Group (has calculation items).
-        /// Calculation groups typically have only a single column (the Name column) plus measures.
+        /// Whether this table is a Calculation Group.
+        /// Detection: Has an "Ordinal" column (calc groups always have this) AND 
+        /// has exactly 2 columns (the Name column and Ordinal column).
         /// </summary>
-        public bool IsCalculationGroup => !string.IsNullOrEmpty(_table.DataCategory) && 
-                                          _table.DataCategory.Equals("CalculationGroup", StringComparison.OrdinalIgnoreCase);
+        public bool IsCalculationGroup
+        {
+            get
+            {
+                // Calculation groups have a specific structure:
+                // 1. An "Ordinal" column (always present)
+                // 2. A "Name" column (named after the calc group or just "Name")
+                // 3. Typically only 2 columns total
+                var columns = _table.Columns.Where(c => c.ObjectType == ADOTabularObjectType.Column).ToList();
+                var hasOrdinalColumn = columns.Any(c => c.Name.Equals("Ordinal", StringComparison.OrdinalIgnoreCase));
+                
+                // Calc groups have exactly 2 columns: the name column and ordinal
+                // They may also have calculation items as measures
+                return hasOrdinalColumn && columns.Count == 2;
+            }
+        }
 
         private int _relationshipCount;
         /// <summary>

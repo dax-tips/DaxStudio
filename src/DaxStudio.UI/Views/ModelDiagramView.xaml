@@ -432,11 +432,15 @@
                                                     
                                                     <!-- Column Type Icon with Key Indicator -->
                                                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,0">
-                                                        <TextBlock Text="🔑"
-                                                                   FontSize="10"
-                                                                   VerticalAlignment="Center"
-                                                                   Margin="0,0,2,0"
-                                                                   Visibility="{Binding IsKey, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                                        <!-- Key indicator using a simple path icon -->
+                                                        <Grid Width="12" Height="12" Margin="0,0,2,0"
+                                                              VerticalAlignment="Center"
+                                                              Visibility="{Binding IsKey, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                              ToolTip="Key column">
+                                                            <Path Data="M7,0 L9,2 L9,4 L7,4 L7,6 L9,6 L9,8 L7,8 L7,10 L5,10 L5,8 L3,8 L3,6 L5,6 L5,4 L3,4 L3,2 L5,0 Z M6,1 L5,2 L5,3 L7,3 L7,2 L6,1 Z"
+                                                                  Fill="#FFB300"
+                                                                  Stretch="Uniform"/>
+                                                        </Grid>
                                                         <!-- Hierarchy level indicator -->
                                                         <TextBlock Text="└"
                                                                    FontSize="10"
@@ -615,7 +619,11 @@
                             BorderThickness="1"
                             BorderBrush="#888888"
                             MinWidth="16"
-                            MinHeight="18">
+                            MinHeight="18"
+                            Cursor="Hand"
+                            MouseEnter="Relationship_MouseEnter"
+                            MouseLeave="Relationship_MouseLeave"
+                            MouseLeftButtonDown="Relationship_MouseLeftButtonDown">
                         <TextBlock Text="{Binding FromCardinality}"
                                    FontSize="{Binding FromCardinalityFontSize}"
                                    FontWeight="Bold"
@@ -634,7 +642,11 @@
                             BorderThickness="1"
                             BorderBrush="#888888"
                             MinWidth="16"
-                            MinHeight="18">
+                            MinHeight="18"
+                            Cursor="Hand"
+                            MouseEnter="Relationship_MouseEnter"
+                            MouseLeave="Relationship_MouseLeave"
+                            MouseLeftButtonDown="Relationship_MouseLeftButtonDown">
                         <TextBlock Text="{Binding ToCardinality}"
                                    FontSize="{Binding ToCardinalityFontSize}"
                                    FontWeight="Bold"
@@ -654,7 +666,11 @@
                             BorderThickness="1"
                             BorderBrush="#888888"
                             RenderTransformOrigin="0,0"
-                            Visibility="{Binding HasValidPositions, Converter={StaticResource BoolToVisibilityConverter}}">
+                            Visibility="{Binding HasValidPositions, Converter={StaticResource BoolToVisibilityConverter}}"
+                            Cursor="Hand"
+                            MouseEnter="Relationship_MouseEnter"
+                            MouseLeave="Relationship_MouseLeave"
+                            MouseLeftButtonDown="Relationship_MouseLeftButtonDown">
                         <Border.RenderTransform>
                             <!-- Use a binding-friendly approach: translate by half width/height -->
                             <TranslateTransform X="-15" Y="-10"/>
